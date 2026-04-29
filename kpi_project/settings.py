@@ -62,6 +62,10 @@ DATABASES = {
     )
 }
 
+# 클라우드 DB 연결 에러 방지 (커서 옵션 끄기)
+if 'postgresql' in DATABASES['default']['ENGINE']:
+    DATABASES['default']['OPTIONS'] = {'DISABLE_SERVER_SIDE_CURSORS': True}
+
 AUTH_USER_MODEL = 'accounts.CustomUser'
 
 AUTH_PASSWORD_VALIDATORS = [

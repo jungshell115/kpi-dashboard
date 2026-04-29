@@ -61,10 +61,6 @@ DATABASES = {
         conn_max_age=600
     )
 }
-if 'OPTIONS' not in DATABASES['default']:
-    DATABASES['default']['OPTIONS'] = {}
-DATABASES['default']['OPTIONS']['DISABLE_SERVER_SIDE_CURSORS'] = True
-
 
 AUTH_USER_MODEL = 'accounts.CustomUser'
 

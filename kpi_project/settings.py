@@ -58,9 +58,10 @@ WSGI_APPLICATION = 'kpi_project.wsgi.application'
 DATABASES = {
     'default': dj_database_url.config(
         default=f'sqlite:///{os.path.join(BASE_DIR, "db.sqlite3")}',
-        conn_max_age=600
+        conn_max_age=0  # 600을 0으로 변경해 주세요 (Vercel 환경에 필수)
     )
 }
+DATABASES['default']['ATOMIC_REQUESTS'] = True  # 이 줄을 반드시 추가해 주세요!
 
 AUTH_USER_MODEL = 'accounts.CustomUser'
 

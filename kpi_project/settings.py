@@ -100,3 +100,19 @@ INTERNAL_DOMAIN = 'ccon.kr'
 
 # Gemini API
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+
+# --- PERFECT NEON DB CURSOR FIX ---
+# Django의 내부 DB 커서 생성기를 가로채서, 문제가 되는 서버사이드 커서를 절대 만들지 못하게 강제합니다.
+try:
+    from django.db.backends.postgresql.base import DatabaseWrapper
+    original_create_cursor = DatabaseWrapper.create_cursor
+
+    def patched_create_cursor(self, name=None):
+        # 강제로 name을 None으로 변경하여 언제나 안전한 클라이언트 커서만 생성합니다!
+        return original_create_cursor(self, name=None)
+
+    DatabaseWrapper.create_cursor = patched_create_cursor
+except Exception:
+    pass
+# ----------------------------------
+

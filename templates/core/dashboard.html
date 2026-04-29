@@ -1,0 +1,54 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="mb-8 flex justify-between items-center">
+    <div>
+        <h1 class="text-2xl font-bold text-gray-900">대시보드</h1>
+        <p class="text-sm text-gray-500 mt-1">담당 사업: <span class="font-semibold text-indigo-600">{{ project_name }}</span></p>
+    </div>
+    <a href="{% url 'add_kpi' %}" class="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-sm hover:bg-indigo-700 transition"><i class="fas fa-plus mr-1"></i> 새 KPI 추가</a>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    {% for perf in performances %}
+    <div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition relative">
+        <!-- Missing Evidence Warning -->
+        {% if perf.achieved_value and not perf.evidence_file %}
+        <div class="absolute -top-2 -right-2 bg-red-100 text-red-600 rounded-full w-8 h-8 flex items-center justify-center shadow-sm" title="증빙 미비">
+            <i class="fas fa-exclamation-triangle text-sm"></i>
+        </div>
+        {% endif %}
+        
+        <div class="flex justify-between items-start mb-4">
+            <div>
+                <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 mb-2">
+                    {{ perf.kpi.ai_suggested_category|default:"미분류" }}
+                </span>
+                <h3 class="text-lg font-semibold text-gray-900">{{ perf.kpi.name }}</h3>
+                <p class="text-sm text-gray-500">{{ perf.month }}월 실적</p>
+            </div>
+            <span class="text-xs font-medium px-2 py-1 rounded {% if perf.status == 'OPEN' %}bg-green-100 text-green-800{% else %}bg-gray-100 text-gray-800{% endif %}">
+                {{ perf.get_status_display }}
+            </span>
+        </div>
+        
+        <div class="mt-4 flex items-baseline justify-between">
+            <div>
+                <p class="text-sm font-medium text-gray-500">목표</p>
+                <p class="text-xl font-semibold text-gray-900">{{ perf.kpi.target_value }}</p>
+            </div>
+            <div class="text-right">
+                <p class="text-sm font-medium text-gray-500">현재 실적</p>
+                <p class="text-3xl font-bold text-indigo-600 count-up" data-target="{{ perf.achieved_value|default:0 }}">0</p>
+            </div>
+        </div>
+    </div>
+    {% empty %}
+    <div class="col-span-full bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center">
+        <div class="text-gray-400 mb-4"><i class="fas fa-folder-open text-4xl"></i></div>
+        <h3 class="text-lg font-medium text-gray-900">등록된 KPI가 없습니다</h3>
+        <p class="text-gray-500 mt-1">새 KPI를 추가하여 성과를 관리해보세요.</p>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

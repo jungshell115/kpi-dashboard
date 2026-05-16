@@ -436,9 +436,16 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
           <Modal open={showForm} onClose={()=>{setShowForm(false);setEditId(null);setForm(empty);}} title={editId?"KPI 수정":"KPI 등록"}>
             <FormContent/>
           </Modal>
+          {!isAdmin(profile) && !profile?.dept_id && (
+            <div style={{background:"#f59e0b22",border:"1px solid #f59e0b44",borderRadius:8,padding:"10px 12px",color:"#f59e0b",fontSize:12,marginBottom:12}}>
+              ⚠ 소속 부서가 없습니다. 관리자에게 부서 배정을 요청하세요.
+            </div>
+          )}
           <div style={{display:"flex",gap:8,marginBottom:12}}>
             <Inp value={search} onChange={setSearch} placeholder="🔍 검색" style={{flex:1,padding:"9px 12px"}}/>
-            <Btn onClick={()=>{setEditId(null);setForm({...empty,dept_id:allowedDepts[0]?.id||""});setShowForm(true);}} style={{whiteSpace:"nowrap",padding:"9px 14px"}}>+ 등록</Btn>
+            {allowedDepts.length > 0 && (
+              <Btn onClick={()=>{setEditId(null);setForm({...empty,dept_id:allowedDepts[0]?.id||""});setShowForm(true);}} style={{whiteSpace:"nowrap",padding:"9px 14px"}}>+ 등록</Btn>
+            )}
           </div>
           <div style={{display:"flex",gap:5,marginBottom:12,overflowX:"auto",paddingBottom:4}}>
             {[{id:"all",name:"전체"},...depts].map(d=>(
@@ -548,6 +555,11 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
 
   return (
     <div>
+      {!isAdmin(profile) && !profile?.dept_id && (
+        <div style={{background:"#f59e0b22",border:"1px solid #f59e0b44",borderRadius:8,padding:"10px 12px",color:"#f59e0b",fontSize:12,marginBottom:12}}>
+          ⚠ 소속 부서가 없어 실적 입력이 불가합니다. 관리자에게 부서 배정을 요청하세요.
+        </div>
+      )}
       <div style={{display:"flex",gap:8,marginBottom:12}}>
         <Inp value={search} onChange={setSearch} placeholder="🔍 지표명·담당자 검색" style={{flex:1,padding:"9px 12px"}}/>
       </div>

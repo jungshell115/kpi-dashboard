@@ -49,6 +49,108 @@ function getRate(kpi) {
 }
 
 // ── CSV / 보고문 ─────────────────────────────────────────────────────
+function exportHTML(kpis, depts, year) {
+  const dn = id => depts.find(d => d.id === id)?.name || "-";
+  const yk = kpis.filter(k => k.year === year);
+  const 달 = yk.filter(k => getSt(k) === "달성").length;
+  const 진 = yk.filter(k => getSt(k) === "진행중").length;
+  const 미달 = yk.filter(k => getSt(k) === "미달").length;
+  const 미입 = yk.filter(k => getSt(k) === "미입력").length;
+  const overall = yk.length > 0 ? Math.round((달 / yk.length) * 100) : 0;
+  const today = new Date().toLocaleDateString("ko-KR");
+  const SC2 = { 달성:"#22c55e", 진행중:"#f59e0b", 미달:"#ef4444", 미입력:"#94a3b8" };
+  const SB  = { 달성:"#f0fdf4", 진행중:"#fffbeb", 미달:"#fef2f2", 미입력:"#f8fafc" };
+
+  const deptSections = depts.map(d => {
+    const dk = yk.filter(k => k.dept_id === d.id);
+    if (!dk.length) return "";
+    const dAvg = (() => {
+      const rates = dk.map(k => getRate(k)).filter(r => r !== null);
+      return rates.length > 0 ? Math.round(rates.reduce((a,b) => a+b,0)/rates.length) : null;
+    })();
+    const rows = dk.map(k => {
+      const cum = getCum(k), rate = getRate(k), st = getSt(k);
+      return `<tr>
+        <td>${k.project}</td>
+        <td><strong>${k.name}</strong><br><span style="color:#94a3b8;font-size:11px">${k.cycle} · 기준 ${k.threshold||100}%</span></td>
+        <td style="text-align:center">${k.target}${k.unit}</td>
+        <td style="text-align:center;font-weight:700;color:${SC2[st]}">${cum !== null ? cum+k.unit : "-"}</td>
+        <td style="min-width:110px">
+          <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
+            <div style="width:${Math.min(rate||0,100)}%;background:${SC2[st]};height:100%;border-radius:4px"></div>
+          </div>
+          <div style="text-align:center;font-size:12px;color:${SC2[st]};font-weight:700;margin-top:3px">${rate !== null ? rate+"%" : "-"}</div>
+        </td>
+        <td style="text-align:center">
+          <span style="background:${SB[st]};color:${SC2[st]};border:1px solid ${SC2[st]}66;border-radius:4px;padding:2px 8px;font-size:12px;font-weight:700">${st}</span>
+        </td>
+        <td style="text-align:center;color:#64748b;font-size:12px">${k.manager}</td>
+      </tr>`;
+    }).join("");
+    return `<div style="margin-bottom:28px">
+      <div style="display:flex;align-items:center;justify-content:space-between;background:#f8fafc;padding:10px 16px;border-radius:8px;margin-bottom:10px;border-left:4px solid #0ea5e9">
+        <h3 style="margin:0;color:#1e293b;font-size:15px;font-weight:800">${d.name}</h3>
+        <span style="font-weight:900;color:#0ea5e9;font-size:20px">${dAvg !== null ? dAvg+"%" : "-"}</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <thead><tr style="background:#f1f5f9">
+          <th style="padding:8px 10px;text-align:left;color:#64748b;font-weight:600;width:16%">사업명</th>
+          <th style="padding:8px 10px;text-align:left;color:#64748b;font-weight:600">KPI 지표</th>
+          <th style="padding:8px 10px;text-align:center;color:#64748b;font-weight:600;width:9%">목표</th>
+          <th style="padding:8px 10px;text-align:center;color:#64748b;font-weight:600;width:9%">실적</th>
+          <th style="padding:8px 10px;text-align:center;color:#64748b;font-weight:600;width:13%">달성률</th>
+          <th style="padding:8px 10px;text-align:center;color:#64748b;font-weight:600;width:9%">상태</th>
+          <th style="padding:8px 10px;text-align:center;color:#64748b;font-weight:600;width:8%">담당자</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+
+  const html = `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+<title>${year}년 KPI 성과 현황 보고서</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#1e293b;background:#fff;padding:40px;max-width:980px;margin:0 auto}
+  table td,table th{padding:9px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  @media print{body{padding:20px}.no-print{display:none!important}@page{size:A4;margin:15mm}}
+</style></head><body>
+<div style="text-align:center;margin-bottom:32px;padding-bottom:24px;border-bottom:2px solid #0ea5e9">
+  <div style="color:#64748b;font-size:13px;margin-bottom:6px">충남도 출연기관 · 경영혁신본부</div>
+  <h1 style="font-size:24px;font-weight:900;color:#0f172a;margin-bottom:6px">${year}년 KPI 성과 현황 보고서</h1>
+  <div style="color:#94a3b8;font-size:13px">기준일: ${today}</div>
+</div>
+<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px">
+  ${[["전체",yk.length,"#0ea5e9"],["달성",달,"#22c55e"],["진행중",진,"#f59e0b"],["미달",미달,"#ef4444"],["미입력",미입,"#94a3b8"]].map(([l,v,c])=>`
+  <div style="border:1px solid #e2e8f0;border-radius:10px;padding:16px;text-align:center;border-top:3px solid ${c}">
+    <div style="color:#64748b;font-size:12px;margin-bottom:6px">${l}</div>
+    <div style="font-size:28px;font-weight:900;color:${c}">${v}</div>
+  </div>`).join("")}
+</div>
+<div style="margin-bottom:28px">
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+    <span style="color:#475569;font-size:13px;font-weight:600">전체 달성률</span>
+    <span style="font-size:22px;font-weight:900;color:#0ea5e9">${overall}%</span>
+  </div>
+  <div style="background:#e2e8f0;border-radius:6px;height:12px;overflow:hidden">
+    <div style="width:${overall}%;background:linear-gradient(90deg,#0ea5e9,#6366f1);height:100%;border-radius:6px"></div>
+  </div>
+</div>
+<h2 style="font-size:15px;font-weight:800;color:#0ea5e9;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e2e8f0">부서별 KPI 현황</h2>
+${deptSections}
+<div style="margin-top:36px;padding-top:16px;border-top:1px solid #e2e8f0;text-align:center;color:#94a3b8;font-size:12px">
+  본 보고서는 KPI 성과관리 시스템에서 자동 생성되었습니다. · ${today}
+</div>
+<div class="no-print" style="position:fixed;bottom:24px;right:24px">
+  <button onclick="window.print()" style="background:#0ea5e9;color:#fff;border:none;border-radius:8px;padding:12px 22px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px #0ea5e944">🖨 인쇄 / PDF 저장</button>
+</div>
+</body></html>`;
+
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+}
+
 function exportCSV(kpis, depts, year) {
   const dn = id => depts.find(d => d.id === id)?.name || "-";
   const header = ["연도","부서","사업명","KPI지표명","목표값","단위","보고주기","담당자","달성기준(%)","누적실적","달성률(%)","상태","최근입력일"];
@@ -776,6 +878,7 @@ function ExportTab({depts, kpis, year, isMobile}) {
       <STitle>보고자료 출력</STitle>
       <div style={{color:"#64748b",fontSize:12,marginBottom:18}}>{year}년 KPI 데이터를 다양한 형식으로 내보낼 수 있습니다</div>
       <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"1fr 1fr",gap:12,marginBottom:20}}>
+        <ExCard icon="🌐" title="HTML 보고서" desc="브라우저에서 바로 보기 · 인쇄·PDF 저장 가능" onClick={()=>exportHTML(kpis,depts,year)} color="#6366f1" tag="HTML"/>
         <ExCard icon="📊" title="KPI 현황 CSV" desc="부서별 KPI 요약표 · 엑셀에서 바로 열기 가능" onClick={()=>exportCSV(kpis,depts,year)} color="#22c55e" tag="엑셀"/>
         <ExCard icon="📋" title="실적 상세 CSV" desc="기간별 실적 이력 전체 · 증빙·비고 포함" onClick={()=>exportDetailCSV(kpis,depts,year)} color="#0ea5e9" tag="엑셀"/>
         <ExCard icon="📝" title="보고문 복사" desc="이사회·도청 보고용 텍스트 · 한 번에 복사" onClick={handleCopy} color={copied?"#22c55e":"#f59e0b"} tag={copied?"✓ 복사됨":"클립보드"}/>

@@ -21,14 +21,14 @@ const sb = createClient(SUPABASE_URL, SUPABASE_ANON);
 // ── 디자인 토큰 ──────────────────────────────────────────────────────
 const T = {
   // 캔버스
-  canvas:   "#f2f0eb",
+  canvas:   "#FAFAFA",
   surface:  "#ffffff",
-  surfaceAlt: "#faf9f7",
-  // 브랜드 그린 4단계
-  houseGreen:  "#1E3932",  // 네비 / 풋터
-  sbGreen:     "#006241",  // 브랜드 헤딩
-  greenAccent: "#00754A",  // CTA / 주요 액션
-  lightGreen:  "#d4edda",  // 그린 틴트 배경
+  surfaceAlt: "#F4F4F5",
+  // 브랜드 컬러 — Midnight & Electric
+  houseGreen:  "#18181B",  // 네비 (아연 블랙)
+  sbGreen:     "#4338CA",  // 브랜드 헤딩 (인디고 700)
+  greenAccent: "#6366F1",  // CTA (인디고 500)
+  lightGreen:  "#EEF2FF",  // 틴트 배경 (인디고 50)
   // 텍스트 알파
   text87:  "rgba(0,0,0,0.87)",
   text54:  "rgba(0,0,0,0.54)",
@@ -114,9 +114,9 @@ function exportHTML(kpis, depts, year) {
       </tr>`;
     }).join("");
     return `<div style="margin-bottom:28px">
-      <div style="display:flex;align-items:center;justify-content:space-between;background:#f0fdf4;padding:10px 16px;border-radius:10px;margin-bottom:10px;border-left:4px solid #006241">
-        <h3 style="margin:0;color:#1E3932;font-size:15px;font-weight:800">${d.name}</h3>
-        <span style="font-weight:900;color:#00754A;font-size:20px">${dAvg !== null ? dAvg+"%" : "-"}</span>
+      <div style="display:flex;align-items:center;justify-content:space-between;background:#EEF2FF;padding:10px 16px;border-radius:10px;margin-bottom:10px;border-left:4px solid #4338CA">
+        <h3 style="margin:0;color:#18181B;font-size:15px;font-weight:800">${d.name}</h3>
+        <span style="font-weight:900;color:#6366F1;font-size:20px">${dAvg !== null ? dAvg+"%" : "-"}</span>
       </div>
       <table style="width:100%;border-collapse:collapse;font-size:13px">
         <thead><tr style="background:#f8f6f1">
@@ -137,18 +137,18 @@ function exportHTML(kpis, depts, year) {
 <title>${year}년 KPI 성과 현황 보고서</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
-  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:rgba(0,0,0,0.87);background:#f2f0eb;padding:40px;max-width:980px;margin:0 auto}
+  body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:rgba(0,0,0,0.87);background:#FAFAFA;padding:40px;max-width:980px;margin:0 auto}
   table td,table th{padding:9px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
   @media print{body{padding:20px;background:#fff}.no-print{display:none!important}@page{size:A4;margin:15mm}}
 </style></head><body>
 <div style="background:#fff;border-radius:16px;padding:32px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.10)">
-<div style="text-align:center;margin-bottom:32px;padding-bottom:24px;border-bottom:2px solid #006241">
+<div style="text-align:center;margin-bottom:32px;padding-bottom:24px;border-bottom:2px solid #4338CA">
   <div style="color:rgba(0,0,0,0.54);font-size:13px;margin-bottom:6px">충남도 출연기관 · 경영혁신본부</div>
-  <h1 style="font-size:24px;font-weight:900;color:#1E3932;margin-bottom:6px">${year}년 KPI 성과 현황 보고서</h1>
+  <h1 style="font-size:24px;font-weight:900;color:#18181B;margin-bottom:6px">${year}년 KPI 성과 현황 보고서</h1>
   <div style="color:rgba(0,0,0,0.38);font-size:13px">기준일: ${today}</div>
 </div>
 <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px">
-  ${[["전체",yk.length,"#006241"],["달성",달,"#22c55e"],["진행중",진,"#f59e0b"],["미달",미달,"#ef4444"],["미입력",미입,"#94a3b8"]].map(([l,v,c])=>`
+  ${[["전체",yk.length,"#6366F1"],["달성",달,"#22c55e"],["진행중",진,"#f59e0b"],["미달",미달,"#ef4444"],["미입력",미입,"#94a3b8"]].map(([l,v,c])=>`
   <div style="border:1px solid rgba(0,0,0,0.09);border-radius:12px;padding:16px;text-align:center;border-top:3px solid ${c}">
     <div style="color:rgba(0,0,0,0.54);font-size:12px;margin-bottom:6px">${l}</div>
     <div style="font-size:28px;font-weight:900;color:${c}">${v}</div>
@@ -157,20 +157,20 @@ function exportHTML(kpis, depts, year) {
 <div style="margin-bottom:28px">
   <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
     <span style="color:rgba(0,0,0,0.54);font-size:13px;font-weight:600">전체 달성률</span>
-    <span style="font-size:22px;font-weight:900;color:#00754A">${overall}%</span>
+    <span style="font-size:22px;font-weight:900;color:#6366F1">${overall}%</span>
   </div>
   <div style="background:#e5e7eb;border-radius:6px;height:12px;overflow:hidden">
-    <div style="width:${overall}%;background:linear-gradient(90deg,#00754A,#22c55e);height:100%;border-radius:6px"></div>
+    <div style="width:${overall}%;background:linear-gradient(90deg,#6366F1,#8B5CF6);height:100%;border-radius:6px"></div>
   </div>
 </div>
-<h2 style="font-size:15px;font-weight:800;color:#006241;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid rgba(0,0,0,0.09)">부서별 KPI 현황</h2>
+<h2 style="font-size:15px;font-weight:800;color:#4338CA;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid rgba(0,0,0,0.09)">부서별 KPI 현황</h2>
 ${deptSections}
 </div>
 <div style="margin-top:20px;padding:16px;text-align:center;color:rgba(0,0,0,0.38);font-size:12px">
   본 보고서는 KPI 성과관리 시스템에서 자동 생성되었습니다. · ${today}
 </div>
 <div class="no-print" style="position:fixed;bottom:24px;right:24px">
-  <button onclick="window.print()" style="background:#00754A;color:#fff;border:none;border-radius:50px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,117,74,0.35)">🖨 인쇄 / PDF 저장</button>
+  <button onclick="window.print()" style="background:#6366F1;color:#fff;border:none;border-radius:50px;padding:12px 24px;font-size:14px;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(99,102,241,0.35)">🖨 인쇄 / PDF 저장</button>
 </div>
 </body></html>`;
 
@@ -497,7 +497,7 @@ function LoginPage({onLogin}) {
             background: T.houseGreen,
             display: "flex", alignItems: "center", justifyContent: "center",
             margin: "0 auto 14px", fontSize: 28,
-          }}>🌿</div>
+          }}>⚡</div>
           <div style={{color:T.sbGreen, fontWeight:900, fontSize:22, marginBottom:4, letterSpacing:"-0.01em"}}>
             KPI 성과관리
           </div>
@@ -1045,7 +1045,7 @@ function DashTab({depts, kpis, year, isMobile}) {
             </div>
             {d.total > 0 && <>
               <div style={{background:"#e5e7eb",borderRadius:6,height:8,overflow:"hidden",marginBottom:6}}>
-                <div style={{width:`${d.달/d.total*100}%`,background:`linear-gradient(90deg,${T.greenAccent},${T.success})`,height:"100%",borderRadius:6,transition:"width 0.6s"}}/>
+                <div style={{width:`${d.달/d.total*100}%`,background:`linear-gradient(90deg,#6366F1,#8B5CF6)`,height:"100%",borderRadius:6,transition:"width 0.6s"}}/>
               </div>
               <div style={{display:"flex",gap:10,fontSize:11,letterSpacing:"-0.01em"}}>
                 <span style={{color:T.success}}>달성 {d.달}</span>

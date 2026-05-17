@@ -75,8 +75,10 @@ function getRate(kpi) {
 }
 
 // ── CSV / 보고문 ─────────────────────────────────────────────────────
+function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
 function exportHTML(kpis, depts, year) {
-  const dn = id => depts.find(d => d.id === id)?.name || "-";
+  const dn = id => escHtml(depts.find(d => d.id === id)?.name || "-");
   const yk = kpis.filter(k => k.year === year);
   const 달 = yk.filter(k => getSt(k) === "달성").length;
   const 진 = yk.filter(k => getSt(k) === "진행중").length;
@@ -97,10 +99,10 @@ function exportHTML(kpis, depts, year) {
     const rows = dk.map(k => {
       const cum = getCum(k), rate = getRate(k), st = getSt(k);
       return `<tr>
-        <td>${k.project}</td>
-        <td><strong>${k.name}</strong><br><span style="color:#94a3b8;font-size:11px">${k.cycle} · 기준 ${k.threshold||100}%</span></td>
-        <td style="text-align:center">${k.target}${k.unit}</td>
-        <td style="text-align:center;font-weight:700;color:${SC2[st]}">${cum !== null ? cum+k.unit : "-"}</td>
+        <td>${escHtml(k.project)}</td>
+        <td><strong>${escHtml(k.name)}</strong><br><span style="color:#94a3b8;font-size:11px">${escHtml(k.cycle)} · 기준 ${k.threshold||100}%</span></td>
+        <td style="text-align:center">${k.target}${escHtml(k.unit)}</td>
+        <td style="text-align:center;font-weight:700;color:${SC2[st]}">${cum !== null ? cum+escHtml(k.unit) : "-"}</td>
         <td style="min-width:110px">
           <div style="background:#e5e7eb;border-radius:4px;height:8px;overflow:hidden">
             <div style="width:${Math.min(rate||0,100)}%;background:${SC2[st]};height:100%;border-radius:4px"></div>
@@ -110,7 +112,7 @@ function exportHTML(kpis, depts, year) {
         <td style="text-align:center">
           <span style="background:${SB[st]};color:${SC2[st]};border:1px solid ${SC2[st]}66;border-radius:20px;padding:2px 10px;font-size:12px;font-weight:700">${st}</span>
         </td>
-        <td style="text-align:center;color:#64748b;font-size:12px">${k.manager}</td>
+        <td style="text-align:center;color:#64748b;font-size:12px">${escHtml(k.manager)}</td>
       </tr>`;
     }).join("");
     return `<div style="margin-bottom:28px">
@@ -189,8 +191,10 @@ function exportCSV(kpis, depts, year) {
     return [year, dn(k.dept_id), k.project, k.name, k.target, k.unit, k.cycle, k.manager, k.threshold||100, cum??"-", rate??"-", st, lastDate];
   });
   const csv = "﻿" + [header,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})), download:`KPI현황_${year}년.csv`});
+  const url = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
+  const a = Object.assign(document.createElement("a"), {href: url, download:`KPI현황_${year}년.csv`});
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function exportDetailCSV(kpis, depts, year) {
@@ -208,8 +212,10 @@ function exportDetailCSV(kpis, depts, year) {
     }
   });
   const csv = "﻿" + [header,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})), download:`KPI실적상세_${year}년.csv`});
+  const url2 = URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"}));
+  const a = Object.assign(document.createElement("a"), {href: url2, download:`KPI실적상세_${year}년.csv`});
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url2);
 }
 
 function copyReportText(kpis, depts, year) {
@@ -270,10 +276,11 @@ function Gauge({rate, status, size=56}) {
   );
 }
 
-const Inp = ({value, onChange, placeholder, type="text", style={}}) => (
+const Inp = ({value, onChange, placeholder, type="text", style={}, onKeyDown=undefined}: any) => (
   <input
     type={type} value={value} placeholder={placeholder}
     onChange={e => onChange(e.target.value)}
+    onKeyDown={onKeyDown}
     style={{
       background: "#fff",
       color: T.text87,
@@ -528,7 +535,8 @@ function LoginPage({onLogin}) {
         </FF>
         {mode !== "reset" && (
           <FF label="비밀번호">
-            <Inp value={pw} onChange={setPw} placeholder="비밀번호" type="password"/>
+            <Inp value={pw} onChange={setPw} placeholder="비밀번호" type="password"
+              onKeyDown={e=>e.key==="Enter"&&submit()}/>
           </FF>
         )}
         <Btn
@@ -681,48 +689,9 @@ function DeptTab({depts, refetch, profile, toast}) {
   );
 }
 
-// ── 탭1: KPI 등록 ─────────────────────────────────────────────────────
-function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
-  const empty = {dept_id:depts[0]?.id||"",project:"",name:"",target:"",unit:"개",cycle:"분기별",manager:profile?.name||"",threshold:"100"};
-  const [form, setForm] = useState(empty);
-  const [editId, setEditId] = useState(null);
-  const [fd, setFd] = useState("all");
-  const [search, setSearch] = useState("");
-  const [showForm, setShowForm] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const set = (k,v) => setForm(f=>({...f,[k]:v}));
-
-  const allowedDepts = isAdmin(profile) ? depts : depts.filter(d => d.id === profile?.dept_id);
-
-  const submit = async () => {
-    if (!form.project||!form.name||!form.target||!form.manager) { toast("모든 항목을 입력해주세요.","error"); return; }
-    if (!canEditDept(profile, form.dept_id)) { toast("해당 부서 KPI를 수정할 권한이 없습니다.","error"); return; }
-    setSaving(true);
-    const payload = {...form, year, target:+form.target, threshold:+form.threshold, created_by: (await sb.auth.getUser()).data.user?.id};
-    if (editId) {
-      const {error} = await sb.from("kpis").update(payload).eq("id", editId);
-      if (error) toast(error.message,"error"); else { toast("수정 완료"); setEditId(null); }
-    } else {
-      const {error} = await sb.from("kpis").insert(payload);
-      if (error) toast(error.message,"error"); else toast("등록 완료");
-    }
-    setForm(empty); setShowForm(false); setSaving(false); refetch();
-  };
-
-  const startEdit = kpi => {
-    setEditId(kpi.id);
-    setForm({dept_id:kpi.dept_id,project:kpi.project,name:kpi.name,target:String(kpi.target),unit:kpi.unit,cycle:kpi.cycle,manager:kpi.manager,threshold:String(kpi.threshold||100)});
-    setShowForm(true);
-  };
-  const del = async id => {
-    if (!confirm("삭제하시겠습니까?")) return;
-    const {error} = await sb.from("kpis").delete().eq("id", id);
-    if (error) toast(error.message,"error"); else { toast("삭제됨","warn"); refetch(); }
-  };
-  const dn = id => depts.find(d=>d.id===id)?.name||"-";
-  const filtered = kpis.filter(k=>(fd==="all"||k.dept_id===fd)&&(k.name.includes(search)||k.project.includes(search)||k.manager.includes(search)));
-
-  const FormContent = () => (
+// ── KPI 등록 폼 (RegisterTab 외부 — 함수 내부 정의 시 매 렌더 unmount 버그 방지) ──
+function RegisterFormContent({form, set, allowedDepts, saving, submit, editId, onCancel}) {
+  return (
     <>
       <FF label="부서">
         <Sel value={form.dept_id} onChange={v=>set("dept_id",v)} options={allowedDepts.map(d=>({value:d.id,label:d.name}))}/>
@@ -742,19 +711,61 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
         {saving ? "저장 중..." : editId ? "수정 완료" : "등록"}
       </Btn>
       {editId && (
-        <Btn onClick={()=>{setEditId(null);setForm(empty);setShowForm(false);}} variant="outline" color={T.text38} full style={{marginTop:8}}>
-          취소
-        </Btn>
+        <Btn onClick={onCancel} variant="outline" color={T.text38} full style={{marginTop:8}}>취소</Btn>
       )}
     </>
   );
+}
+
+// ── 탭1: KPI 등록 ─────────────────────────────────────────────────────
+function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
+  const empty = {dept_id:depts[0]?.id||"",project:"",name:"",target:"",unit:"개",cycle:"분기별",manager:profile?.name||"",threshold:"100"};
+  const [form, setForm] = useState(empty);
+  const [editId, setEditId] = useState(null);
+  const [fd, setFd] = useState("all");
+  const [search, setSearch] = useState("");
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const set = useCallback((k,v) => setForm(f=>({...f,[k]:v})), []);
+
+  const allowedDepts = isAdmin(profile) ? depts : depts.filter(d => d.id === profile?.dept_id);
+
+  const submit = useCallback(async () => {
+    if (!form.project||!form.name||!form.target||!form.manager) { toast("모든 항목을 입력해주세요.","error"); return; }
+    if (!canEditDept(profile, form.dept_id)) { toast("해당 부서 KPI를 수정할 권한이 없습니다.","error"); return; }
+    setSaving(true);
+    const userId = profile?.id; // auth user ID = profile PK, getUser() 호출 불필요
+    const payload = {...form, year, target:+form.target, threshold:+form.threshold, created_by: userId};
+    if (editId) {
+      const {error} = await sb.from("kpis").update(payload).eq("id", editId);
+      if (error) toast(error.message,"error"); else { toast("수정 완료"); setEditId(null); }
+    } else {
+      const {error} = await sb.from("kpis").insert(payload);
+      if (error) toast(error.message,"error"); else toast("등록 완료");
+    }
+    setForm(empty); setShowForm(false); setSaving(false); refetch();
+  }, [form, editId, year, profile, toast, refetch, empty]);
+
+  const startEdit = kpi => {
+    setEditId(kpi.id);
+    setForm({dept_id:kpi.dept_id,project:kpi.project,name:kpi.name,target:String(kpi.target),unit:kpi.unit,cycle:kpi.cycle,manager:kpi.manager,threshold:String(kpi.threshold||100)});
+    setShowForm(true);
+  };
+  const del = async id => {
+    if (!confirm("삭제하시겠습니까?")) return;
+    const {error} = await sb.from("kpis").delete().eq("id", id);
+    if (error) toast(error.message,"error"); else { toast("삭제됨","warn"); refetch(); }
+  };
+  const dn = id => depts.find(d=>d.id===id)?.name||"-";
+  const filtered = kpis.filter(k=>(fd==="all"||k.dept_id===fd)&&(k.name.includes(search)||k.project.includes(search)||k.manager.includes(search)));
+  const cancelEdit = useCallback(()=>{setEditId(null);setForm(empty);setShowForm(false);},[empty]);
 
   return (
     <div>
       {isMobile ? (
         <>
-          <Modal open={showForm} onClose={()=>{setShowForm(false);setEditId(null);setForm(empty);}} title={editId?"KPI 수정":"KPI 등록"}>
-            <FormContent/>
+          <Modal open={showForm} onClose={cancelEdit} title={editId?"KPI 수정":"KPI 등록"}>
+            <RegisterFormContent form={form} set={set} allowedDepts={allowedDepts} saving={saving} submit={submit} editId={editId} onCancel={cancelEdit}/>
           </Modal>
           {!isAdmin(profile) && !profile?.dept_id && (
             <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"10px 14px",color:"#92400e",fontSize:12,marginBottom:12,letterSpacing:"-0.01em"}}>
@@ -781,7 +792,7 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
             <STitle>{editId ? "✏️ KPI 수정" : "➕ KPI 등록"}</STitle>
             <div style={{color:T.text38,fontSize:11,marginBottom:12,letterSpacing:"-0.01em"}}>{year}년도</div>
             {allowedDepts.length > 0
-              ? <FormContent/>
+              ? <RegisterFormContent form={form} set={set} allowedDepts={allowedDepts} saving={saving} submit={submit} editId={editId} onCancel={cancelEdit}/>
               : <div style={{color:T.text38,fontSize:13,letterSpacing:"-0.01em"}}>등록 가능한 부서가 없습니다.<br/>관리자에게 부서 배정을 요청하세요.</div>
             }
           </Card>
@@ -870,7 +881,7 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
     const kpi = kpis.find(k=>k.id===kpiId);
     if (!canEditDept(profile, kpi.dept_id)) { toast("해당 부서 실적을 입력할 권한이 없습니다.","error"); return; }
     setSaving(true);
-    const userId = (await sb.auth.getUser()).data.user?.id;
+    const userId = profile?.id;
     const existing = kpi.records.find(r=>r.period===form.period);
     if (existing) {
       const {error} = await sb.from("kpi_records").update({actual:+form.actual,evidence:form.evidence,note:form.note,entered_by:userId,entered_at:new Date().toISOString()}).eq("id",existing.id);
@@ -996,7 +1007,7 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
 
 // ── 탭3: 관리 현황 ────────────────────────────────────────────────────
 function DashTab({depts, kpis, year, isMobile}) {
-  const yk = kpis.filter(k=>k.year===year);
+  const yk = useMemo(()=>kpis.filter(k=>k.year===year),[kpis,year]);
   const stats = useMemo(()=>{
     const t=yk.length, 달=yk.filter(k=>getSt(k)==="달성").length;
     const 진=yk.filter(k=>getSt(k)==="진행중").length;
@@ -1189,13 +1200,13 @@ function AccountTab({depts, toast}) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  const fetchProfiles = async () => {
+  const fetchProfiles = useCallback(async () => {
     setLoading(true);
     const {data} = await sb.from("profiles").select("*").order("created_at");
     if (data) setProfiles(data);
     setLoading(false);
-  };
-  useEffect(()=>{ fetchProfiles(); },[]);
+  }, []);
+  useEffect(()=>{ fetchProfiles(); },[fetchProfiles]);
 
   const updateRole = async (id, role) => {
     const {error} = await sb.from("profiles").update({role}).eq("id",id);
@@ -1710,10 +1721,16 @@ function TAssignForm({ctx}: any) {
     // 중복 배정 방지
     if (activeAsgn.find(a=>a.room_id===f.room_id)) { toast("이미 점유 중인 호실입니다","error"); return; }
     setSaving(true);
+    // 원자성 보장: rooms 업데이트 실패 시 조기 종료
     const {error:re} = await sb.from("rooms").update({status:"점유"}).eq("id",f.room_id);
+    if (re) { toast(re.message,"error"); setSaving(false); return; }
     const {error:ae} = await sb.from("tenant_rooms").insert({...f, expected_end:f.expected_end||null});
-    if (re||ae) toast((re||ae).message,"error");
-    else { toast("배정 완료"); setAssignModal(false); fetchAll(); }
+    if (ae) {
+      // 롤백
+      await sb.from("rooms").update({status:"공실"}).eq("id",f.room_id);
+      toast(ae.message,"error"); setSaving(false); return;
+    }
+    toast("배정 완료"); setAssignModal(false); fetchAll();
     setSaving(false);
   };
   return (
@@ -1744,18 +1761,18 @@ function TExitForm({ctx}: any) {
   const [saving,setSaving]   = useState(false);
   useEffect(()=>{ setEndDate(new Date().toISOString().slice(0,10)); setReason(""); }, [exitCtx, exitModal]);
 
-  const tenant = tenants.find(t=>t.id===exitCtx?.tenant_id);
-  const room   = rooms.find(r=>r.id===exitCtx?.room_id);
+  if (!exitCtx) return null; // null guard — hooks 이전에 위치해야 함
 
-  if (!exitCtx) return null; // null guard
+  const tenant = tenants.find(t=>t.id===exitCtx.tenant_id);
+  const room   = rooms.find(r=>r.id===exitCtx.room_id);
 
   const submit = async () => {
-    if (!exitCtx) return;
     setSaving(true);
     const {error:ae} = await sb.from("tenant_rooms").update({end_date:endDate,exit_reason:reason}).eq("id",exitCtx.id);
+    if (ae) { toast(ae.message,"error"); setSaving(false); return; }
     const {error:re} = await sb.from("rooms").update({status:"공실"}).eq("id",exitCtx.room_id);
-    if (ae||re) toast((ae||re).message,"error");
-    else { toast("퇴실 처리 완료","warn"); setExitModal(false); fetchAll(); }
+    if (re) { toast(re.message,"error"); setSaving(false); return; }
+    toast("퇴실 처리 완료","warn"); setExitModal(false); fetchAll();
     setSaving(false);
   };
   return (
@@ -1823,8 +1840,12 @@ function TRecordForm({ctx}: any) {
       graduation_status:  f.graduation_status,
       notes:              f.notes,
     };
-    const {error} = existing
-      ? await sb.from("tenant_records").update(payload).eq("id",existing.id)
+    // upsert: year가 바뀌어도 기존 레코드 있으면 업데이트, 없으면 삽입
+    const {data:chk} = await sb.from("tenant_records")
+      .select("id").eq("tenant_id",recordCtx.tenant_id).eq("year",+f.year).maybeSingle();
+    const targetId = existing?.year===+f.year ? existing.id : chk?.id;
+    const {error} = targetId
+      ? await sb.from("tenant_records").update(payload).eq("id",targetId)
       : await sb.from("tenant_records").insert(payload);
     if (error) toast(error.message,"error");
     else { toast("실적 저장 완료"); setRecordModal(false); fetchAll(); }
@@ -1894,14 +1915,15 @@ function TenantTab({profile, toast, isMobile}) {
         sb.from("tenant_records").select("*").order("year", {ascending:false}),
       ]);
       const err = sp.error||ro.error||te.error||tr.error||rec.error;
-      if (err) { toast(err.message, "error"); setLoading(false); return; }
+      if (err) { toast(err.message, "error"); return; }
       setSpaces(sp.data||[]); setRooms(ro.data||[]);
       setTenants(te.data||[]); setTRooms(tr.data||[]);
       setRecords(rec.data||[]);
     } catch(e) {
       toast("데이터 로드 실패", "error");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [toast]);
   useEffect(()=>{ fetchAll(); },[fetchAll]);
 

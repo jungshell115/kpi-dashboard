@@ -175,6 +175,7 @@ ${deptSections}
 </body></html>`;
 
   const w = window.open("", "_blank");
+  if (!w) { alert("팝업이 차단되어 있습니다. 브라우저에서 팝업을 허용해주세요."); return; }
   w.document.write(html);
   w.document.close();
 }
@@ -189,7 +190,7 @@ function exportCSV(kpis, depts, year) {
   });
   const csv = "﻿" + [header,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})), download:`KPI현황_${year}년.csv`});
-  a.click();
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
 function exportDetailCSV(kpis, depts, year) {
@@ -208,7 +209,7 @@ function exportDetailCSV(kpis, depts, year) {
   });
   const csv = "﻿" + [header,...rows].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
   const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8;"})), download:`KPI실적상세_${year}년.csv`});
-  a.click();
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
 }
 
 function copyReportText(kpis, depts, year) {
@@ -569,6 +570,7 @@ function useSupabaseData(year) {
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
+    setKpis([]); // 연도 변경 시 이전 데이터 즉시 클리어
     const [dRes, kRes] = await Promise.all([
       sb.from("departments").select("*").order("sort_order"),
       sb.from("kpis").select("*").eq("year", year).order("created_at"),
@@ -582,6 +584,7 @@ function useSupabaseData(year) {
     const kpiIds = (kRes.data || []).map(k => k.id);
     if (kpiIds.length === 0) { setKpis([]); setLoading(false); return; }
     const rRes = await sb.from("kpi_records").select("*").in("kpi_id", kpiIds).order("entered_at");
+    if (rRes.error) console.error("records fetch error", rRes.error);
     const kpiFull = (kRes.data || []).map(k => ({
       ...k,
       records: (rRes.data || []).filter(r => r.kpi_id === k.id),
@@ -592,14 +595,18 @@ function useSupabaseData(year) {
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
+  // 최신 fetchAll 을 ref 로 유지 → realtime 채널은 한 번만 생성
+  const fetchAllRef = useRef(fetchAll);
+  useEffect(() => { fetchAllRef.current = fetchAll; }, [fetchAll]);
+
   useEffect(() => {
-    const ch = sb.channel("kpi-realtime")
-      .on("postgres_changes", {event:"*", schema:"public", table:"kpis"},        () => fetchAll())
-      .on("postgres_changes", {event:"*", schema:"public", table:"kpi_records"}, () => fetchAll())
-      .on("postgres_changes", {event:"*", schema:"public", table:"departments"}, () => fetchAll())
+    const ch = sb.channel("kpi-realtime-main")
+      .on("postgres_changes", {event:"*", schema:"public", table:"kpis"},        () => fetchAllRef.current())
+      .on("postgres_changes", {event:"*", schema:"public", table:"kpi_records"}, () => fetchAllRef.current())
+      .on("postgres_changes", {event:"*", schema:"public", table:"departments"}, () => fetchAllRef.current())
       .subscribe();
     return () => sb.removeChannel(ch);
-  }, [fetchAll]);
+  }, []); // 마운트 시 한 번만 구독
 
   return { depts, setDepts, kpis, setKpis, loading, refetch: fetchAll };
 }
@@ -854,7 +861,7 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
 
   const openInput = kpi => {
     setOpenId(kpi.id);
-    const ps = getPeriods(kpi.cycle), used = kpi.records.map(r=>r.period);
+    const ps = getPeriods(kpi.cycle), used = (kpi.records||[]).map(r=>r.period);
     setForm({period:ps.find(p=>!used.includes(p))||ps[ps.length-1], actual:"", evidence:"", note:""});
   };
 
@@ -1243,227 +1250,187 @@ function AccountTab({depts, toast}) {
   );
 }
 
-// ── 탭6: 입주기업 관리 ────────────────────────────────────────────────
-function TenantTab({profile, toast, isMobile}) {
-  const admin = isAdmin(profile);
-  const [subTab, setSubTab]     = useState(0); // 0:현황 1:기업 2:설정
-  const [loading, setLoading]   = useState(true);
-  const [spaces, setSpaces]     = useState([]);
-  const [rooms, setRooms]       = useState([]);
-  const [tenants, setTenants]   = useState([]);
-  const [tRooms, setTRooms]     = useState([]); // tenant_rooms
-  const [records, setRecords]   = useState([]); // tenant_records
-  const [selSpace, setSelSpace] = useState("all");
+// ── 입주기업 탭 — 공통 상수 ──────────────────────────────────────────
+const ROOM_TYPES = ["1인실","2인실","3인실","4인실","5인실","6인실","대형","기타"];
+const SC_ROOM: any = {공실:T.success, 점유:T.greenAccent, 유지보수:T.warn, 비활성:T.muted};
 
-  // 모달 상태
-  const [spaceModal,  setSpaceModal]  = useState(false);
-  const [roomModal,   setRoomModal]   = useState(false);
-  const [tenantModal, setTenantModal] = useState(false);
-  const [assignModal, setAssignModal] = useState(false);
-  const [exitModal,   setExitModal]   = useState(false);
-  const [recordModal, setRecordModal] = useState(false);
-
-  // 편집 대상
-  const [editSpace,  setEditSpace]  = useState(null);
-  const [editRoom,   setEditRoom]   = useState(null);
-  const [editTenant, setEditTenant] = useState(null);
-  const [assignCtx,  setAssignCtx]  = useState(null); // {room_id}
-  const [exitCtx,    setExitCtx]    = useState(null); // tenant_rooms row
-  const [recordCtx,  setRecordCtx]  = useState(null); // {tenant_id, existing|null}
-
-  const fetchAll = useCallback(async () => {
-    setLoading(true);
-    const [sp, ro, te, tr, rec] = await Promise.all([
-      sb.from("spaces").select("*").order("sort_order"),
-      sb.from("rooms").select("*").order("sort_order"),
-      sb.from("tenants").select("*").order("company_name"),
-      sb.from("tenant_rooms").select("*").order("start_date"),
-      sb.from("tenant_records").select("*").order("year", {ascending:false}),
-    ]);
-    setSpaces(sp.data||[]); setRooms(ro.data||[]);
-    setTenants(te.data||[]); setTRooms(tr.data||[]);
-    setRecords(rec.data||[]); setLoading(false);
-  }, []);
-  useEffect(()=>{ fetchAll(); },[fetchAll]);
-
-  // ── 헬퍼 ──
-  const TODAY = new Date();
-  const getDday   = d => d ? Math.ceil((new Date(d)-TODAY)/(864e5)) : null;
-  const fmt       = d => d ? String(d).slice(0,10) : "—";
-  const fmtKRW    = v => {
-    if (!v) return "—";
-    if (v>=1e8) return `${(v/1e8).toFixed(1)}억원`;
-    if (v>=1e7) return `${(v/1e7).toFixed(0)}천만원`;
-    if (v>=1e6) return `${(v/1e6).toFixed(0)}백만원`;
-    return `${Number(v).toLocaleString()}원`;
-  };
-  const SC_ROOM = {공실:T.success, 점유:T.greenAccent, 유지보수:T.warn, 비활성:T.muted};
-  const ROOM_TYPES = ["1인실","2인실","3인실","4인실","5인실","6인실","대형","기타"];
-  const activeAsgn = tRooms.filter(a => !a.end_date);
-  const getRoomTenant  = rid => { const a=activeAsgn.find(x=>x.room_id===rid); return a ? tenants.find(t=>t.id===a.tenant_id) : null; };
-  const getRoomAsgn    = rid => activeAsgn.find(x=>x.room_id===rid);
-  const getTenantRooms = tid => activeAsgn.filter(a=>a.tenant_id===tid).map(a=>rooms.find(r=>r.id===a.room_id)).filter(Boolean);
-  const filteredRooms  = selSpace==="all" ? rooms : rooms.filter(r=>r.space_id===selSpace);
-  const activeRooms    = filteredRooms.filter(r=>r.status!=="비활성");
-  const occupiedRooms  = activeRooms.filter(r=>r.status==="점유");
-
-  if (loading) return <Spinner/>;
-
-  const SUB = ["호실 현황","기업 목록",...(admin?["공간·호실 설정"]:[])];
-
-  // ══════════════════════════════════════════════
-  // 서브뷰 1: 호실 현황
-  // ══════════════════════════════════════════════
-  const ViewRooms = () => {
-    const soon = activeAsgn
-      .filter(a=>{ const d=getDday(a.expected_end); return d!==null && d>=0 && d<=60; })
-      .map(a=>({...a, room:rooms.find(r=>r.id===a.room_id), tenant:tenants.find(t=>t.id===a.tenant_id)}))
-      .filter(a=>a.room&&a.tenant)
-      .sort((a,b)=>getDday(a.expected_end)-getDday(b.expected_end));
-
-    return (
-      <div>
-        {/* 요약 */}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:18}}>
-          {[
-            ["전체 호실", `${activeRooms.length}개`, T.sbGreen],
-            ["점유중",    `${occupiedRooms.length}개`, T.greenAccent],
-            ["점유율",    activeRooms.length ? `${Math.round(occupiedRooms.length/activeRooms.length*100)}%` : "—", T.greenAccent],
-          ].map(([l,v,c])=>(
-            <Card key={l} style={{padding:"12px 14px",textAlign:"center"}}>
-              <div style={{color:T.text38,fontSize:11,marginBottom:4,letterSpacing:"-0.01em"}}>{l}</div>
-              <div style={{color:c,fontWeight:900,fontSize:22,letterSpacing:"-0.02em"}}>{v}</div>
-            </Card>
-          ))}
-        </div>
-
-        {/* 퇴실 임박 */}
-        {soon.length>0 && (
-          <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"10px 14px",marginBottom:16}}>
-            <div style={{color:"#92400e",fontWeight:700,fontSize:12,marginBottom:6}}>⚠ 퇴실 예정 임박 ({soon.length}건)</div>
-            {soon.map(a=>(
-              <div key={a.id} style={{color:"#92400e",fontSize:12,marginBottom:2}}>
-                · {a.room.room_no} ({a.room.room_type}) — {a.tenant.company_name} — D-{getDday(a.expected_end)}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* 공간 필터 */}
-        <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
-          {[{id:"all",name:"전체"},...spaces].map(s=>(
-            <Chip key={s.id} label={s.name} active={selSpace===s.id} onClick={()=>setSelSpace(s.id)}/>
-          ))}
-        </div>
-
-        {/* 호실 목록 */}
-        {isMobile ? (
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {activeRooms.map(room=>{
-              const tenant=getRoomTenant(room.id), asgn=getRoomAsgn(room.id);
-              const dday=asgn?.expected_end?getDday(asgn.expected_end):null;
-              return (
-                <Card key={room.id} style={{padding:"12px 14px",borderLeft:`3px solid ${SC_ROOM[room.status]||T.border}`}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
-                        <span style={{fontWeight:800,fontSize:15,color:T.text87}}>{room.room_no}</span>
-                        <Badge text={room.room_type} color={T.text38}/>
-                        <span style={{color:T.text38,fontSize:11}}>정원 {room.capacity}인</span>
-                      </div>
-                      {tenant ? (
-                        <>
-                          <div style={{fontWeight:700,color:T.sbGreen,fontSize:13}}>{tenant.company_name}</div>
-                          {asgn?.project_name && <div style={{color:T.text38,fontSize:11}}>{asgn.project_name}</div>}
-                          <div style={{color:T.text54,fontSize:11,marginTop:2}}>
-                            입주 {fmt(asgn?.start_date)}{asgn?.expected_end && ` → 예정 ${fmt(asgn.expected_end)}`}
-                          </div>
-                        </>
-                      ) : <div style={{color:T.muted,fontSize:13}}>공실</div>}
-                    </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
-                      <Badge text={room.status} color={SC_ROOM[room.status]||T.muted}/>
-                      {dday!==null && dday<=60 && (
-                        <span style={{fontSize:11,fontWeight:700,color:dday<=14?T.error:T.warn}}>D-{dday}</span>
-                      )}
-                    </div>
-                  </div>
-                  {admin && (
-                    <div style={{display:"flex",gap:6,marginTop:10,justifyContent:"flex-end"}}>
-                      {!tenant
-                        ? <Btn onClick={()=>{setAssignCtx({room_id:room.id});setAssignModal(true);}} style={{padding:"5px 12px",fontSize:12}}>+ 기업 배정</Btn>
-                        : <Btn onClick={()=>{setExitCtx(getRoomAsgn(room.id));setExitModal(true);}} variant="outline" color={T.warn} style={{padding:"5px 12px",fontSize:12}}>퇴실 처리</Btn>
-                      }
-                    </div>
-                  )}
-                </Card>
-              );
-            })}
-          </div>
-        ) : (
-          <Card style={{overflow:"hidden"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr style={{background:T.surfaceAlt,borderBottom:`1px solid ${T.border}`}}>
-                  {["호실","유형 (정원)","입주기업","운영사업","입주일","퇴실예정","D-day","상태",""].map(h=>(
-                    <th key={h} style={{padding:"10px 12px",textAlign:"left",color:T.text38,fontWeight:600,fontSize:12,whiteSpace:"nowrap"}}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {activeRooms.map(room=>{
-                  const tenant=getRoomTenant(room.id), asgn=getRoomAsgn(room.id);
-                  const dday=asgn?.expected_end?getDday(asgn.expected_end):null;
-                  const space=spaces.find(s=>s.id===room.space_id);
-                  return (
-                    <tr key={room.id} style={{borderBottom:`1px solid ${T.border}`}}>
-                      <td style={{padding:"10px 12px",fontWeight:800,color:T.text87}}>{room.room_no}</td>
-                      <td style={{padding:"10px 12px"}}>
-                        <span style={{color:T.text87}}>{room.room_type}</span>
-                        <span style={{color:T.text38,fontSize:11,marginLeft:4}}>({room.capacity}인)</span>
-                      </td>
-                      <td style={{padding:"10px 12px"}}>
-                        {tenant
-                          ? <span style={{fontWeight:700,color:T.sbGreen}}>{tenant.company_name}</span>
-                          : <span style={{color:T.muted}}>—</span>}
-                      </td>
-                      <td style={{padding:"10px 12px",color:T.text54,fontSize:12}}>
-                        {asgn?.project_name || space?.name || "—"}
-                      </td>
-                      <td style={{padding:"10px 12px",color:T.text54,fontSize:12,whiteSpace:"nowrap"}}>{fmt(asgn?.start_date)}</td>
-                      <td style={{padding:"10px 12px",color:T.text54,fontSize:12,whiteSpace:"nowrap"}}>{fmt(asgn?.expected_end)}</td>
-                      <td style={{padding:"10px 12px",whiteSpace:"nowrap"}}>
-                        {dday!==null
-                          ? <span style={{fontWeight:700,fontSize:12,color:dday<=14?T.error:dday<=60?T.warn:T.text38}}>
-                              {dday>=0?`D-${dday}`:`D+${Math.abs(dday)}`}
-                            </span>
-                          : <span style={{color:T.text38}}>—</span>}
-                      </td>
-                      <td style={{padding:"10px 12px"}}><Badge text={room.status} color={SC_ROOM[room.status]||T.muted}/></td>
-                      <td style={{padding:"10px 12px"}}>
-                        {admin && (!tenant
-                          ? <Btn onClick={()=>{setAssignCtx({room_id:room.id});setAssignModal(true);}} style={{padding:"4px 10px",fontSize:11}}>배정</Btn>
-                          : <Btn onClick={()=>{setExitCtx(getRoomAsgn(room.id));setExitModal(true);}} variant="outline" color={T.warn} style={{padding:"4px 10px",fontSize:11}}>퇴실</Btn>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {activeRooms.length===0 && (
-              <div style={{textAlign:"center",padding:40,color:T.text38}}>호실이 없습니다. 설정 탭에서 추가해주세요.</div>
-            )}
-          </Card>
-        )}
+// ── MoneyField (독립 컴포넌트) ────────────────────────────────────────
+function MoneyField({label, amtKey, curKey, rateKey, krwVal, f, setF, fmtKRW}: any) {
+  return (
+    <div style={{background:T.surfaceAlt,borderRadius:10,padding:"12px 14px",marginBottom:14,border:`1px solid ${T.border}`}}>
+      <div style={{color:T.text54,fontSize:12,fontWeight:600,marginBottom:8}}>{label}</div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginBottom:6}}>
+        <Inp type="number" value={f[amtKey]} onChange={v=>setF(p=>({...p,[amtKey]:v}))} placeholder="금액 입력"/>
+        <Sel value={f[curKey]} onChange={v=>setF(p=>({...p,[curKey]:v}))} options={[{value:"KRW",label:"₩ KRW"},{value:"USD",label:"$ USD"}]}/>
       </div>
-    );
-  };
+      {f[curKey]==="USD" && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+          <Inp type="number" value={f[rateKey]} onChange={v=>setF(p=>({...p,[rateKey]:v}))} placeholder="환율 (예: 1380)" style={{flex:1}}/>
+          <span style={{color:T.text38,fontSize:12,whiteSpace:"nowrap"}}>원/달러</span>
+        </div>
+      )}
+      {f[amtKey] && (
+        <div style={{fontSize:12,fontWeight:700,color:krwVal?T.sbGreen:T.warn,marginTop:4}}>
+          ≈ {krwVal ? fmtKRW(krwVal) : (f[curKey]==="USD"?"환율을 입력해주세요":"—")}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  // ══════════════════════════════════════════════
-  // 서브뷰 2: 기업 목록
-  // ══════════════════════════════════════════════
-  const ViewTenants = () => (
+// ── 호실 현황 뷰 ──────────────────────────────────────────────────────
+function TViewRooms({ctx}: any) {
+  const {admin,isMobile,spaces,rooms,tenants,activeAsgn,selSpace,setSelSpace,
+         activeRooms,occupiedRooms,getDday,fmt,getRoomTenant,getRoomAsgn,
+         setAssignCtx,setAssignModal,setExitCtx,setExitModal} = ctx;
+
+  const soon = activeAsgn
+    .filter(a=>{ const d=getDday(a.expected_end); return d!==null && d>=0 && d<=60; })
+    .map(a=>({...a, room:rooms.find(r=>r.id===a.room_id), tenant:tenants.find(t=>t.id===a.tenant_id)}))
+    .filter(a=>a.room&&a.tenant)
+    .sort((a,b)=>getDday(a.expected_end)-getDday(b.expected_end));
+
+  return (
+    <div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:18}}>
+        {[
+          ["전체 호실", `${activeRooms.length}개`, T.sbGreen],
+          ["점유중",    `${occupiedRooms.length}개`, T.greenAccent],
+          ["점유율",    activeRooms.length ? `${Math.round(occupiedRooms.length/activeRooms.length*100)}%` : "—", T.greenAccent],
+        ].map(([l,v,c])=>(
+          <Card key={l as string} style={{padding:"12px 14px",textAlign:"center"}}>
+            <div style={{color:T.text38,fontSize:11,marginBottom:4,letterSpacing:"-0.01em"}}>{l}</div>
+            <div style={{color:c as string,fontWeight:900,fontSize:22,letterSpacing:"-0.02em"}}>{v}</div>
+          </Card>
+        ))}
+      </div>
+
+      {soon.length>0 && (
+        <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"10px 14px",marginBottom:16}}>
+          <div style={{color:"#92400e",fontWeight:700,fontSize:12,marginBottom:6}}>⚠ 퇴실 예정 임박 ({soon.length}건)</div>
+          {soon.map(a=>(
+            <div key={a.id} style={{color:"#92400e",fontSize:12,marginBottom:2}}>
+              · {a.room.room_no} ({a.room.room_type}) — {a.tenant.company_name} — D-{getDday(a.expected_end)}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+        {[{id:"all",name:"전체"},...spaces].map(s=>(
+          <Chip key={s.id} label={s.name} active={selSpace===s.id} onClick={()=>setSelSpace(s.id)}/>
+        ))}
+      </div>
+
+      {isMobile ? (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {activeRooms.map(room=>{
+            const tenant=getRoomTenant(room.id), asgn=getRoomAsgn(room.id);
+            const dday=asgn?.expected_end?getDday(asgn.expected_end):null;
+            return (
+              <Card key={room.id} style={{padding:"12px 14px",borderLeft:`3px solid ${SC_ROOM[room.status]||T.border}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:4,flexWrap:"wrap"}}>
+                      <span style={{fontWeight:800,fontSize:15,color:T.text87}}>{room.room_no}</span>
+                      <Badge text={room.room_type} color={T.text38}/>
+                      <span style={{color:T.text38,fontSize:11}}>정원 {room.capacity}인</span>
+                    </div>
+                    {tenant ? (
+                      <>
+                        <div style={{fontWeight:700,color:T.sbGreen,fontSize:13}}>{tenant.company_name}</div>
+                        {asgn?.project_name && <div style={{color:T.text38,fontSize:11}}>{asgn.project_name}</div>}
+                        <div style={{color:T.text54,fontSize:11,marginTop:2}}>
+                          입주 {fmt(asgn?.start_date)}{asgn?.expected_end && ` → 예정 ${fmt(asgn.expected_end)}`}
+                        </div>
+                      </>
+                    ) : <div style={{color:T.muted,fontSize:13}}>공실</div>}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+                    <Badge text={room.status} color={SC_ROOM[room.status]||T.muted}/>
+                    {dday!==null && dday<=60 && (
+                      <span style={{fontSize:11,fontWeight:700,color:dday<=14?T.error:T.warn}}>D-{dday}</span>
+                    )}
+                  </div>
+                </div>
+                {admin && (
+                  <div style={{display:"flex",gap:6,marginTop:10,justifyContent:"flex-end"}}>
+                    {!tenant
+                      ? <Btn onClick={()=>{setAssignCtx({room_id:room.id});setAssignModal(true);}} style={{padding:"5px 12px",fontSize:12}}>+ 기업 배정</Btn>
+                      : <Btn onClick={()=>{setExitCtx(getRoomAsgn(room.id));setExitModal(true);}} variant="outline" color={T.warn} style={{padding:"5px 12px",fontSize:12}}>퇴실 처리</Btn>
+                    }
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      ) : (
+        <Card style={{overflow:"hidden"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+            <thead>
+              <tr style={{background:T.surfaceAlt,borderBottom:`1px solid ${T.border}`}}>
+                {["호실","유형 (정원)","입주기업","운영사업","입주일","퇴실예정","D-day","상태",""].map(h=>(
+                  <th key={h} style={{padding:"10px 12px",textAlign:"left",color:T.text38,fontWeight:600,fontSize:12,whiteSpace:"nowrap"}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {activeRooms.map(room=>{
+                const tenant=getRoomTenant(room.id), asgn=getRoomAsgn(room.id);
+                const dday=asgn?.expected_end?getDday(asgn.expected_end):null;
+                const space=spaces.find(s=>s.id===room.space_id);
+                return (
+                  <tr key={room.id} style={{borderBottom:`1px solid ${T.border}`}}>
+                    <td style={{padding:"10px 12px",fontWeight:800,color:T.text87}}>{room.room_no}</td>
+                    <td style={{padding:"10px 12px"}}>
+                      <span style={{color:T.text87}}>{room.room_type}</span>
+                      <span style={{color:T.text38,fontSize:11,marginLeft:4}}>({room.capacity}인)</span>
+                    </td>
+                    <td style={{padding:"10px 12px"}}>
+                      {tenant
+                        ? <span style={{fontWeight:700,color:T.sbGreen}}>{tenant.company_name}</span>
+                        : <span style={{color:T.muted}}>—</span>}
+                    </td>
+                    <td style={{padding:"10px 12px",color:T.text54,fontSize:12}}>
+                      {asgn?.project_name || space?.name || "—"}
+                    </td>
+                    <td style={{padding:"10px 12px",color:T.text54,fontSize:12,whiteSpace:"nowrap"}}>{fmt(asgn?.start_date)}</td>
+                    <td style={{padding:"10px 12px",color:T.text54,fontSize:12,whiteSpace:"nowrap"}}>{fmt(asgn?.expected_end)}</td>
+                    <td style={{padding:"10px 12px",whiteSpace:"nowrap"}}>
+                      {dday!==null
+                        ? <span style={{fontWeight:700,fontSize:12,color:dday<=14?T.error:dday<=60?T.warn:T.text38}}>
+                            {dday>=0?`D-${dday}`:`D+${Math.abs(dday)}`}
+                          </span>
+                        : <span style={{color:T.text38}}>—</span>}
+                    </td>
+                    <td style={{padding:"10px 12px"}}><Badge text={room.status} color={SC_ROOM[room.status]||T.muted}/></td>
+                    <td style={{padding:"10px 12px"}}>
+                      {admin && (!tenant
+                        ? <Btn onClick={()=>{setAssignCtx({room_id:room.id});setAssignModal(true);}} style={{padding:"4px 10px",fontSize:11}}>배정</Btn>
+                        : <Btn onClick={()=>{setExitCtx(getRoomAsgn(room.id));setExitModal(true);}} variant="outline" color={T.warn} style={{padding:"4px 10px",fontSize:11}}>퇴실</Btn>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          {activeRooms.length===0 && (
+            <div style={{textAlign:"center",padding:40,color:T.text38}}>호실이 없습니다. 설정 탭에서 추가해주세요.</div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ── 기업 목록 뷰 ──────────────────────────────────────────────────────
+function TViewTenants({ctx}: any) {
+  const {admin,tenants,activeAsgn,records,getTenantRooms,fmt,fmtKRW,
+         setEditTenant,setTenantModal,setRecordCtx,setRecordModal} = ctx;
+
+  return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
         <STitle>입주기업 ({tenants.length}개)</STitle>
@@ -1472,7 +1439,10 @@ function TenantTab({profile, toast, isMobile}) {
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {tenants.map(t=>{
           const trs  = getTenantRooms(t.id);
-          const asgn = activeAsgn.find(a=>a.tenant_id===t.id);
+          const allAsgns = activeAsgn.filter(a=>a.tenant_id===t.id);
+          // 가장 이른 입주일, 가장 늦은 퇴실예정일 표시
+          const minStart = allAsgns.reduce((m,a)=>(!m||a.start_date<m)?a.start_date:m, null);
+          const maxEnd   = allAsgns.reduce((m,a)=>(!a.expected_end)?m:(!m||a.expected_end>m)?a.expected_end:m, null);
           const recs = records.filter(r=>r.tenant_id===t.id);
           const latest = recs[0];
           return (
@@ -1496,8 +1466,8 @@ function TenantTab({profile, toast, isMobile}) {
                       : <span style={{color:T.muted,fontSize:12}}>현재 배정 호실 없음</span>}
                   </div>
                   <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:T.text54}}>
-                    {asgn?.start_date && <span>입주 {fmt(asgn.start_date)}</span>}
-                    {asgn?.expected_end && <span>퇴실예정 {fmt(asgn.expected_end)}</span>}
+                    {minStart && <span>입주 {fmt(minStart)}</span>}
+                    {maxEnd   && <span>퇴실예정 {fmt(maxEnd)}</span>}
                     {t.ceo_name && <span>대표 {t.ceo_name}</span>}
                     {latest?.employee_count && <span>직원 {latest.employee_count}명</span>}
                     {latest?.revenue_krw && <span>매출 {fmtKRW(latest.revenue_krw)}</span>}
@@ -1542,11 +1512,12 @@ function TenantTab({profile, toast, isMobile}) {
       </div>
     </div>
   );
+}
 
-  // ══════════════════════════════════════════════
-  // 서브뷰 3: 공간·호실 설정 (admin)
-  // ══════════════════════════════════════════════
-  const ViewSettings = () => (
+// ── 공간·호실 설정 뷰 (admin) ─────────────────────────────────────────
+function TViewSettings({ctx}: any) {
+  const {spaces,rooms,setEditSpace,setSpaceModal,setEditRoom,setRoomModal} = ctx;
+  return (
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
         <STitle>공간 관리</STitle>
@@ -1583,39 +1554,54 @@ function TenantTab({profile, toast, isMobile}) {
       {spaces.length===0 && <div style={{textAlign:"center",padding:60,color:T.text38}}>공간을 먼저 추가해주세요</div>}
     </div>
   );
+}
 
-  // ══════════════════════════════════════════════
-  // 폼 모달들
-  // ══════════════════════════════════════════════
+// ── 공간 폼 ───────────────────────────────────────────────────────────
+function TSpaceForm({ctx}: any) {
+  const {editSpace,spaceModal,setSpaceModal,toast,fetchAll,spaces} = ctx;
+  const [f,setF] = useState({name:editSpace?.name||"", location:editSpace?.location||"", description:editSpace?.description||""});
+  const [saving,setSaving] = useState(false);
+  // editSpace 가 바뀔 때 폼 초기화
+  useEffect(()=>{
+    setF({name:editSpace?.name||"", location:editSpace?.location||"", description:editSpace?.description||""});
+  }, [editSpace, spaceModal]);
 
-  // 공간 폼
-  const SpaceForm = () => {
-    const [f,setF] = useState({name:editSpace?.name||"", location:editSpace?.location||"", description:editSpace?.description||""});
-    const [saving,setSaving] = useState(false);
-    const submit = async () => {
-      if (!f.name.trim()) { toast("공간명을 입력해주세요","error"); return; }
-      setSaving(true);
-      const payload = {name:f.name.trim(), location:f.location, description:f.description, sort_order:editSpace?.sort_order??spaces.length};
-      const {error} = editSpace
-        ? await sb.from("spaces").update(payload).eq("id",editSpace.id)
-        : await sb.from("spaces").insert(payload);
-      if (error) toast(error.message,"error");
-      else { toast(editSpace?"공간 수정 완료":"공간 추가 완료"); setSpaceModal(false); fetchAll(); }
-      setSaving(false);
-    };
-    return (
-      <Modal open={spaceModal} onClose={()=>setSpaceModal(false)} title={editSpace?"공간 수정":"공간 추가"}>
-        <FF label="공간명"><Inp value={f.name} onChange={v=>setF(p=>({...p,name:v}))} placeholder="예) 창업보육센터 A관"/></FF>
-        <FF label="위치/주소"><Inp value={f.location} onChange={v=>setF(p=>({...p,location:v}))} placeholder="예) 본관 2층"/></FF>
-        <FF label="설명"><Inp value={f.description} onChange={v=>setF(p=>({...p,description:v}))} placeholder="간단한 설명 (선택)"/></FF>
-        <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":editSpace?"수정 완료":"추가"}</Btn>
-      </Modal>
-    );
+  const submit = async () => {
+    if (!f.name.trim()) { toast("공간명을 입력해주세요","error"); return; }
+    setSaving(true);
+    const payload = {name:f.name.trim(), location:f.location, description:f.description, sort_order:editSpace?.sort_order??spaces.length};
+    const {error} = editSpace
+      ? await sb.from("spaces").update(payload).eq("id",editSpace.id)
+      : await sb.from("spaces").insert(payload);
+    if (error) toast(error.message,"error");
+    else { toast(editSpace?"공간 수정 완료":"공간 추가 완료"); setSpaceModal(false); fetchAll(); }
+    setSaving(false);
   };
+  return (
+    <Modal open={spaceModal} onClose={()=>setSpaceModal(false)} title={editSpace?"공간 수정":"공간 추가"}>
+      <FF label="공간명"><Inp value={f.name} onChange={v=>setF(p=>({...p,name:v}))} placeholder="예) 창업보육센터 A관"/></FF>
+      <FF label="위치/주소"><Inp value={f.location} onChange={v=>setF(p=>({...p,location:v}))} placeholder="예) 본관 2층"/></FF>
+      <FF label="설명"><Inp value={f.description} onChange={v=>setF(p=>({...p,description:v}))} placeholder="간단한 설명 (선택)"/></FF>
+      <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":editSpace?"수정 완료":"추가"}</Btn>
+    </Modal>
+  );
+}
 
-  // 호실 폼
-  const RoomForm = () => {
-    const [f,setF] = useState({
+// ── 호실 폼 ───────────────────────────────────────────────────────────
+function TRoomForm({ctx}: any) {
+  const {editRoom,roomModal,setRoomModal,toast,fetchAll,spaces,rooms} = ctx;
+  const [f,setF] = useState({
+    space_id: editRoom?.space_id||spaces[0]?.id||"",
+    room_no:  editRoom?.room_no||"",
+    room_type:editRoom?.room_type||"1인실",
+    capacity: editRoom?.capacity??1,
+    area_m2:  editRoom?.area_m2||"",
+    status:   editRoom?.status||"공실",
+    notes:    editRoom?.notes||"",
+  });
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{
+    setF({
       space_id: editRoom?.space_id||spaces[0]?.id||"",
       room_no:  editRoom?.room_no||"",
       room_type:editRoom?.room_type||"1인실",
@@ -1624,42 +1610,50 @@ function TenantTab({profile, toast, isMobile}) {
       status:   editRoom?.status||"공실",
       notes:    editRoom?.notes||"",
     });
-    const [saving,setSaving]=useState(false);
-    const isEdit = editRoom?.id;
-    const submit = async () => {
-      if (!f.room_no.trim()) { toast("호실 번호를 입력해주세요","error"); return; }
-      setSaving(true);
-      const payload = {...f, capacity:+f.capacity, area_m2:f.area_m2?+f.area_m2:null, sort_order:editRoom?.sort_order??rooms.filter(r=>r.space_id===f.space_id).length};
-      const {error} = isEdit
-        ? await sb.from("rooms").update(payload).eq("id",editRoom.id)
-        : await sb.from("rooms").insert(payload);
-      if (error) toast(error.message,"error");
-      else { toast(isEdit?"호실 수정 완료":"호실 추가 완료"); setRoomModal(false); fetchAll(); }
-      setSaving(false);
-    };
-    return (
-      <Modal open={roomModal} onClose={()=>setRoomModal(false)} title={isEdit?"호실 수정":"호실 추가"}>
-        {!editRoom?.id && (
-          <FF label="공간"><Sel value={f.space_id} onChange={v=>setF(p=>({...p,space_id:v}))} options={spaces.map(s=>({value:s.id,label:s.name}))}/></FF>
-        )}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="호실 번호"><Inp value={f.room_no} onChange={v=>setF(p=>({...p,room_no:v}))} placeholder="예) 201호"/></FF>
-          <FF label="유형"><Sel value={f.room_type} onChange={v=>setF(p=>({...p,room_type:v}))} options={ROOM_TYPES.map(t=>({value:t,label:t}))}/></FF>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="정원 (인원수)"><Inp type="number" value={f.capacity} onChange={v=>setF(p=>({...p,capacity:v}))} placeholder="예) 3"/></FF>
-          <FF label="면적 (㎡, 선택)"><Inp type="number" value={f.area_m2} onChange={v=>setF(p=>({...p,area_m2:v}))} placeholder="예) 15.5"/></FF>
-        </div>
-        <FF label="상태"><Sel value={f.status} onChange={v=>setF(p=>({...p,status:v}))} options={["공실","점유","유지보수","비활성"].map(s=>({value:s,label:s}))}/></FF>
-        <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
-        <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":isEdit?"수정 완료":"추가"}</Btn>
-      </Modal>
-    );
-  };
+  }, [editRoom, roomModal]);
 
-  // 기업 폼
-  const TenantForm = () => {
-    const [f,setF] = useState({
+  const isEdit = editRoom?.id;
+  const submit = async () => {
+    if (!f.room_no.trim()) { toast("호실 번호를 입력해주세요","error"); return; }
+    setSaving(true);
+    const payload = {...f, capacity:+f.capacity, area_m2:f.area_m2?+f.area_m2:null, sort_order:editRoom?.sort_order??rooms.filter(r=>r.space_id===f.space_id).length};
+    const {error} = isEdit
+      ? await sb.from("rooms").update(payload).eq("id",editRoom.id)
+      : await sb.from("rooms").insert(payload);
+    if (error) toast(error.message,"error");
+    else { toast(isEdit?"호실 수정 완료":"호실 추가 완료"); setRoomModal(false); fetchAll(); }
+    setSaving(false);
+  };
+  return (
+    <Modal open={roomModal} onClose={()=>setRoomModal(false)} title={isEdit?"호실 수정":"호실 추가"}>
+      {!isEdit && (
+        <FF label="공간"><Sel value={f.space_id} onChange={v=>setF(p=>({...p,space_id:v}))} options={spaces.map(s=>({value:s.id,label:s.name}))}/></FF>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="호실 번호"><Inp value={f.room_no} onChange={v=>setF(p=>({...p,room_no:v}))} placeholder="예) 201호"/></FF>
+        <FF label="유형"><Sel value={f.room_type} onChange={v=>setF(p=>({...p,room_type:v}))} options={ROOM_TYPES.map(t=>({value:t,label:t}))}/></FF>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="정원 (인원수)"><Inp type="number" value={f.capacity} onChange={v=>setF(p=>({...p,capacity:v}))} placeholder="예) 3"/></FF>
+        <FF label="면적 (㎡, 선택)"><Inp type="number" value={f.area_m2} onChange={v=>setF(p=>({...p,area_m2:v}))} placeholder="예) 15.5"/></FF>
+      </div>
+      <FF label="상태"><Sel value={f.status} onChange={v=>setF(p=>({...p,status:v}))} options={["공실","점유","유지보수","비활성"].map(s=>({value:s,label:s}))}/></FF>
+      <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
+      <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":isEdit?"수정 완료":"추가"}</Btn>
+    </Modal>
+  );
+}
+
+// ── 기업 폼 ───────────────────────────────────────────────────────────
+function TTenantForm({ctx}: any) {
+  const {editTenant,tenantModal,setTenantModal,toast,fetchAll} = ctx;
+  const [f,setF] = useState({
+    company_name:"", ceo_name:"", business_type:"",
+    contact:"", registration_no:"", notes:"",
+  });
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{
+    setF({
       company_name:   editTenant?.company_name||"",
       ceo_name:       editTenant?.ceo_name||"",
       business_type:  editTenant?.business_type||"",
@@ -1667,199 +1661,308 @@ function TenantTab({profile, toast, isMobile}) {
       registration_no:editTenant?.registration_no||"",
       notes:          editTenant?.notes||"",
     });
-    const [saving,setSaving]=useState(false);
-    const submit = async () => {
-      if (!f.company_name.trim()) { toast("기업명을 입력해주세요","error"); return; }
-      setSaving(true);
-      const {error} = editTenant
-        ? await sb.from("tenants").update(f).eq("id",editTenant.id)
-        : await sb.from("tenants").insert(f);
-      if (error) toast(error.message,"error");
-      else { toast(editTenant?"기업 정보 수정":"기업 등록 완료"); setTenantModal(false); fetchAll(); }
-      setSaving(false);
-    };
-    return (
-      <Modal open={tenantModal} onClose={()=>setTenantModal(false)} title={editTenant?"기업 수정":"기업 추가"}>
-        <FF label="기업명"><Inp value={f.company_name} onChange={v=>setF(p=>({...p,company_name:v}))} placeholder="예) ㈜스타트업"/></FF>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="대표자명"><Inp value={f.ceo_name} onChange={v=>setF(p=>({...p,ceo_name:v}))} placeholder="홍길동"/></FF>
-          <FF label="업종"><Inp value={f.business_type} onChange={v=>setF(p=>({...p,business_type:v}))} placeholder="예) IT서비스"/></FF>
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="연락처"><Inp value={f.contact} onChange={v=>setF(p=>({...p,contact:v}))} placeholder="010-0000-0000"/></FF>
-          <FF label="사업자번호 (선택)"><Inp value={f.registration_no} onChange={v=>setF(p=>({...p,registration_no:v}))} placeholder="000-00-00000"/></FF>
-        </div>
-        <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
-        <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":editTenant?"수정 완료":"등록"}</Btn>
-      </Modal>
-    );
+  }, [editTenant, tenantModal]);
+
+  const submit = async () => {
+    if (!f.company_name.trim()) { toast("기업명을 입력해주세요","error"); return; }
+    setSaving(true);
+    const {error} = editTenant
+      ? await sb.from("tenants").update(f).eq("id",editTenant.id)
+      : await sb.from("tenants").insert(f);
+    if (error) toast(error.message,"error");
+    else { toast(editTenant?"기업 정보 수정":"기업 등록 완료"); setTenantModal(false); fetchAll(); }
+    setSaving(false);
   };
-
-  // 기업-호실 배정 폼
-  const AssignForm = () => {
-    const [f,setF] = useState({
-      tenant_id:    "",
-      room_id:      assignCtx?.room_id||"",
-      project_name: "",
-      start_date:   new Date().toISOString().slice(0,10),
-      expected_end: "",
-    });
-    const [saving,setSaving]=useState(false);
-    const availableRooms = rooms.filter(r=>r.status==="공실"||r.id===f.room_id);
-    const submit = async () => {
-      if (!f.tenant_id||!f.room_id||!f.start_date) { toast("기업·호실·입주일을 모두 입력해주세요","error"); return; }
-      setSaving(true);
-      // 호실 상태 → 점유
-      const {error:re} = await sb.from("rooms").update({status:"점유"}).eq("id",f.room_id);
-      const {error:ae} = await sb.from("tenant_rooms").insert({...f, expected_end:f.expected_end||null});
-      if (re||ae) toast((re||ae).message,"error");
-      else { toast("배정 완료"); setAssignModal(false); fetchAll(); }
-      setSaving(false);
-    };
-    return (
-      <Modal open={assignModal} onClose={()=>setAssignModal(false)} title="기업 배정">
-        <FF label="기업">
-          <Sel value={f.tenant_id} onChange={v=>setF(p=>({...p,tenant_id:v}))}
-            options={[{value:"",label:"기업 선택"},...tenants.map(t=>({value:t.id,label:t.company_name}))]}/>
-        </FF>
-        <FF label="호실">
-          <Sel value={f.room_id} onChange={v=>setF(p=>({...p,room_id:v}))}
-            options={[{value:"",label:"호실 선택"},...availableRooms.map(r=>({value:r.id,label:`${r.room_no} (${r.room_type} · 정원${r.capacity}인)`}))]}/>
-        </FF>
-        <FF label="운영사업명"><Inp value={f.project_name} onChange={v=>setF(p=>({...p,project_name:v}))} placeholder="예) 창업육성사업"/></FF>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="입주일"><Inp type="date" value={f.start_date} onChange={v=>setF(p=>({...p,start_date:v}))}/></FF>
-          <FF label="퇴실예정일"><Inp type="date" value={f.expected_end} onChange={v=>setF(p=>({...p,expected_end:v}))}/></FF>
-        </div>
-        <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":"배정 완료"}</Btn>
-      </Modal>
-    );
-  };
-
-  // 퇴실 처리 폼
-  const ExitForm = () => {
-    const [endDate,setEndDate] = useState(new Date().toISOString().slice(0,10));
-    const [reason,setReason]   = useState("");
-    const [saving,setSaving]   = useState(false);
-    const tenant = tenants.find(t=>t.id===exitCtx?.tenant_id);
-    const room   = rooms.find(r=>r.id===exitCtx?.room_id);
-    const submit = async () => {
-      setSaving(true);
-      const {error:ae} = await sb.from("tenant_rooms").update({end_date:endDate,exit_reason:reason}).eq("id",exitCtx.id);
-      const {error:re} = await sb.from("rooms").update({status:"공실"}).eq("id",exitCtx.room_id);
-      if (ae||re) toast((ae||re).message,"error");
-      else { toast("퇴실 처리 완료","warn"); setExitModal(false); fetchAll(); }
-      setSaving(false);
-    };
-    return (
-      <Modal open={exitModal} onClose={()=>setExitModal(false)} title="퇴실 처리">
-        <div style={{background:T.surfaceAlt,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13}}>
-          <span style={{fontWeight:700,color:T.text87}}>{room?.room_no}</span>
-          <span style={{color:T.text54,margin:"0 6px"}}>·</span>
-          <span style={{fontWeight:700,color:T.sbGreen}}>{tenant?.company_name}</span>
-        </div>
-        <FF label="퇴실일"><Inp type="date" value={endDate} onChange={setEndDate}/></FF>
-        <FF label="퇴실 사유 (선택)"><Inp value={reason} onChange={setReason} placeholder="예) 계약만료, 자진퇴소"/></FF>
-        <Btn onClick={submit} color={T.warn} full disabled={saving}>{saving?"처리 중...":"퇴실 처리"}</Btn>
-      </Modal>
-    );
-  };
-
-  // 연간 실적 폼
-  const RecordForm = () => {
-    const existing = recordCtx?.existing;
-    const [f,setF] = useState({
-      year:               existing?.year||CY,
-      employee_count:     existing?.employee_count||"",
-      revenue_amount:     existing?.revenue_amount||"",
-      revenue_currency:   existing?.revenue_currency||"KRW",
-      revenue_rate:       existing?.revenue_rate||"",
-      investment_amount:  existing?.investment_amount||"",
-      investment_currency:existing?.investment_currency||"KRW",
-      investment_rate:    existing?.investment_rate||"",
-      patent_count:       existing?.patent_count||"",
-      graduation_status:  existing?.graduation_status||"재입주",
-      notes:              existing?.notes||"",
-    });
-    const [saving,setSaving]=useState(false);
-    const tenant = tenants.find(t=>t.id===recordCtx?.tenant_id);
-
-    // KRW 자동 계산
-    const revKRW  = f.revenue_amount    ? (f.revenue_currency==="USD"    ? (f.revenue_rate    ? Math.round(+f.revenue_amount    * +f.revenue_rate)    : null) : +f.revenue_amount)    : null;
-    const invKRW  = f.investment_amount ? (f.investment_currency==="USD" ? (f.investment_rate ? Math.round(+f.investment_amount * +f.investment_rate) : null) : +f.investment_amount) : null;
-
-    const submit = async () => {
-      setSaving(true);
-      const payload = {
-        tenant_id:          recordCtx.tenant_id,
-        year:               +f.year,
-        employee_count:     f.employee_count?+f.employee_count:null,
-        revenue_amount:     f.revenue_amount?+f.revenue_amount:null,
-        revenue_currency:   f.revenue_currency,
-        revenue_rate:       f.revenue_currency==="USD"&&f.revenue_rate?+f.revenue_rate:null,
-        revenue_krw:        revKRW,
-        investment_amount:  f.investment_amount?+f.investment_amount:null,
-        investment_currency:f.investment_currency,
-        investment_rate:    f.investment_currency==="USD"&&f.investment_rate?+f.investment_rate:null,
-        investment_krw:     invKRW,
-        patent_count:       f.patent_count?+f.patent_count:null,
-        graduation_status:  f.graduation_status,
-        notes:              f.notes,
-      };
-      const {error} = existing
-        ? await sb.from("tenant_records").update(payload).eq("id",existing.id)
-        : await sb.from("tenant_records").insert(payload);
-      if (error) toast(error.message,"error");
-      else { toast("실적 저장 완료"); setRecordModal(false); fetchAll(); }
-      setSaving(false);
-    };
-
-    const MoneyField = ({label, amtKey, curKey, rateKey, krwVal}) => (
-      <div style={{background:T.surfaceAlt,borderRadius:10,padding:"12px 14px",marginBottom:14,border:`1px solid ${T.border}`}}>
-        <div style={{color:T.text54,fontSize:12,fontWeight:600,marginBottom:8}}>{label}</div>
-        <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:8,marginBottom:6}}>
-          <Inp type="number" value={f[amtKey]} onChange={v=>setF(p=>({...p,[amtKey]:v}))} placeholder="금액 입력"/>
-          <Sel value={f[curKey]} onChange={v=>setF(p=>({...p,[curKey]:v}))} options={[{value:"KRW",label:"₩ KRW"},{value:"USD",label:"$ USD"}]}/>
-        </div>
-        {f[curKey]==="USD" && (
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-            <Inp type="number" value={f[rateKey]} onChange={v=>setF(p=>({...p,[rateKey]:v}))} placeholder="환율 (예: 1380)" style={{flex:1}}/>
-            <span style={{color:T.text38,fontSize:12,whiteSpace:"nowrap"}}>원/달러</span>
-          </div>
-        )}
-        {f[amtKey] && (
-          <div style={{fontSize:12,fontWeight:700,color:krwVal?T.sbGreen:T.warn,marginTop:4}}>
-            ≈ {krwVal ? fmtKRW(krwVal) : (f[curKey]==="USD"?"환율을 입력해주세요":"—")}
-          </div>
-        )}
+  return (
+    <Modal open={tenantModal} onClose={()=>setTenantModal(false)} title={editTenant?"기업 수정":"기업 추가"}>
+      <FF label="기업명"><Inp value={f.company_name} onChange={v=>setF(p=>({...p,company_name:v}))} placeholder="예) ㈜스타트업"/></FF>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="대표자명"><Inp value={f.ceo_name} onChange={v=>setF(p=>({...p,ceo_name:v}))} placeholder="홍길동"/></FF>
+        <FF label="업종"><Inp value={f.business_type} onChange={v=>setF(p=>({...p,business_type:v}))} placeholder="예) IT서비스"/></FF>
       </div>
-    );
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="연락처"><Inp value={f.contact} onChange={v=>setF(p=>({...p,contact:v}))} placeholder="010-0000-0000"/></FF>
+        <FF label="사업자번호 (선택)"><Inp value={f.registration_no} onChange={v=>setF(p=>({...p,registration_no:v}))} placeholder="000-00-00000"/></FF>
+      </div>
+      <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
+      <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":editTenant?"수정 완료":"등록"}</Btn>
+    </Modal>
+  );
+}
 
-    return (
-      <Modal open={recordModal} onClose={()=>setRecordModal(false)} title={`${tenant?.company_name||""} 실적 입력`}>
-        <FF label="연도">
-          <Sel value={f.year} onChange={v=>setF(p=>({...p,year:v}))}
-            options={[CY-2,CY-1,CY,CY+1].map(y=>({value:y,label:`${y}년`}))}/>
-        </FF>
-        <FF label="근무자 수">
-          <Inp type="number" value={f.employee_count} onChange={v=>setF(p=>({...p,employee_count:v}))} placeholder="명"/>
-        </FF>
-        <MoneyField label="매출액" amtKey="revenue_amount" curKey="revenue_currency" rateKey="revenue_rate" krwVal={revKRW}/>
-        <MoneyField label="투자유치액" amtKey="investment_amount" curKey="investment_currency" rateKey="investment_rate" krwVal={invKRW}/>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-          <FF label="특허 수"><Inp type="number" value={f.patent_count} onChange={v=>setF(p=>({...p,patent_count:v}))} placeholder="건"/></FF>
-          <FF label="상태">
-            <Sel value={f.graduation_status} onChange={v=>setF(p=>({...p,graduation_status:v}))}
-              options={["재입주","졸업","퇴소","해당없음"].map(s=>({value:s,label:s}))}/>
-          </FF>
-        </div>
-        <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
-        <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":"실적 저장"}</Btn>
-      </Modal>
-    );
+// ── 기업-호실 배정 폼 ─────────────────────────────────────────────────
+function TAssignForm({ctx}: any) {
+  const {assignCtx,assignModal,setAssignModal,toast,fetchAll,tenants,rooms,activeAsgn} = ctx;
+  const [f,setF] = useState({
+    tenant_id:"", room_id:assignCtx?.room_id||"",
+    project_name:"",
+    start_date:new Date().toISOString().slice(0,10),
+    expected_end:"",
+  });
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{
+    setF(p=>({...p, tenant_id:"", room_id:assignCtx?.room_id||"", project_name:"", expected_end:""}));
+  }, [assignCtx, assignModal]);
+
+  const availableRooms = rooms.filter(r=>r.status==="공실"||r.id===f.room_id);
+  const submit = async () => {
+    if (!f.tenant_id||!f.room_id||!f.start_date) { toast("기업·호실·입주일을 모두 입력해주세요","error"); return; }
+    // 중복 배정 방지
+    if (activeAsgn.find(a=>a.room_id===f.room_id)) { toast("이미 점유 중인 호실입니다","error"); return; }
+    setSaving(true);
+    const {error:re} = await sb.from("rooms").update({status:"점유"}).eq("id",f.room_id);
+    const {error:ae} = await sb.from("tenant_rooms").insert({...f, expected_end:f.expected_end||null});
+    if (re||ae) toast((re||ae).message,"error");
+    else { toast("배정 완료"); setAssignModal(false); fetchAll(); }
+    setSaving(false);
+  };
+  return (
+    <Modal open={assignModal} onClose={()=>setAssignModal(false)} title="기업 배정">
+      <FF label="기업">
+        <Sel value={f.tenant_id} onChange={v=>setF(p=>({...p,tenant_id:v}))}
+          options={[{value:"",label:"기업 선택"},...tenants.map(t=>({value:t.id,label:t.company_name}))]}/>
+      </FF>
+      <FF label="호실">
+        <Sel value={f.room_id} onChange={v=>setF(p=>({...p,room_id:v}))}
+          options={[{value:"",label:"호실 선택"},...availableRooms.map(r=>({value:r.id,label:`${r.room_no} (${r.room_type} · 정원${r.capacity}인)`}))]}/>
+      </FF>
+      <FF label="운영사업명"><Inp value={f.project_name} onChange={v=>setF(p=>({...p,project_name:v}))} placeholder="예) 창업육성사업"/></FF>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="입주일"><Inp type="date" value={f.start_date} onChange={v=>setF(p=>({...p,start_date:v}))}/></FF>
+        <FF label="퇴실예정일"><Inp type="date" value={f.expected_end} onChange={v=>setF(p=>({...p,expected_end:v}))}/></FF>
+      </div>
+      <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":"배정 완료"}</Btn>
+    </Modal>
+  );
+}
+
+// ── 퇴실 처리 폼 ─────────────────────────────────────────────────────
+function TExitForm({ctx}: any) {
+  const {exitCtx,exitModal,setExitModal,toast,fetchAll,tenants,rooms} = ctx;
+  const [endDate,setEndDate] = useState(new Date().toISOString().slice(0,10));
+  const [reason,setReason]   = useState("");
+  const [saving,setSaving]   = useState(false);
+  useEffect(()=>{ setEndDate(new Date().toISOString().slice(0,10)); setReason(""); }, [exitCtx, exitModal]);
+
+  const tenant = tenants.find(t=>t.id===exitCtx?.tenant_id);
+  const room   = rooms.find(r=>r.id===exitCtx?.room_id);
+
+  if (!exitCtx) return null; // null guard
+
+  const submit = async () => {
+    if (!exitCtx) return;
+    setSaving(true);
+    const {error:ae} = await sb.from("tenant_rooms").update({end_date:endDate,exit_reason:reason}).eq("id",exitCtx.id);
+    const {error:re} = await sb.from("rooms").update({status:"공실"}).eq("id",exitCtx.room_id);
+    if (ae||re) toast((ae||re).message,"error");
+    else { toast("퇴실 처리 완료","warn"); setExitModal(false); fetchAll(); }
+    setSaving(false);
+  };
+  return (
+    <Modal open={exitModal} onClose={()=>setExitModal(false)} title="퇴실 처리">
+      <div style={{background:T.surfaceAlt,borderRadius:10,padding:"10px 14px",marginBottom:14,fontSize:13}}>
+        <span style={{fontWeight:700,color:T.text87}}>{room?.room_no}</span>
+        <span style={{color:T.text54,margin:"0 6px"}}>·</span>
+        <span style={{fontWeight:700,color:T.sbGreen}}>{tenant?.company_name}</span>
+      </div>
+      <FF label="퇴실일"><Inp type="date" value={endDate} onChange={setEndDate}/></FF>
+      <FF label="퇴실 사유 (선택)"><Inp value={reason} onChange={setReason} placeholder="예) 계약만료, 자진퇴소"/></FF>
+      <Btn onClick={submit} color={T.warn} full disabled={saving}>{saving?"처리 중...":"퇴실 처리"}</Btn>
+    </Modal>
+  );
+}
+
+// ── 연간 실적 폼 ──────────────────────────────────────────────────────
+function TRecordForm({ctx}: any) {
+  const {recordCtx,recordModal,setRecordModal,toast,fetchAll,tenants,fmtKRW} = ctx;
+  const existing = recordCtx?.existing;
+  const [f,setF] = useState({
+    year:CY, employee_count:"",
+    revenue_amount:"", revenue_currency:"KRW", revenue_rate:"",
+    investment_amount:"", investment_currency:"KRW", investment_rate:"",
+    patent_count:"", graduation_status:"재입주", notes:"",
+  });
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{
+    const e = recordCtx?.existing;
+    setF({
+      year:               e?.year||CY,
+      employee_count:     e?.employee_count||"",
+      revenue_amount:     e?.revenue_amount||"",
+      revenue_currency:   e?.revenue_currency||"KRW",
+      revenue_rate:       e?.revenue_rate||"",
+      investment_amount:  e?.investment_amount||"",
+      investment_currency:e?.investment_currency||"KRW",
+      investment_rate:    e?.investment_rate||"",
+      patent_count:       e?.patent_count||"",
+      graduation_status:  e?.graduation_status||"재입주",
+      notes:              e?.notes||"",
+    });
+  }, [recordCtx, recordModal]);
+
+  const tenant = tenants.find(t=>t.id===recordCtx?.tenant_id);
+  const revKRW = f.revenue_amount    ? (f.revenue_currency==="USD"    ? (f.revenue_rate    ? Math.round(+f.revenue_amount    * +f.revenue_rate)    : null) : +f.revenue_amount)    : null;
+  const invKRW = f.investment_amount ? (f.investment_currency==="USD" ? (f.investment_rate ? Math.round(+f.investment_amount * +f.investment_rate) : null) : +f.investment_amount) : null;
+
+  const submit = async () => {
+    if (!recordCtx?.tenant_id) return;
+    setSaving(true);
+    const payload = {
+      tenant_id:          recordCtx.tenant_id,
+      year:               +f.year,
+      employee_count:     f.employee_count?+f.employee_count:null,
+      revenue_amount:     f.revenue_amount?+f.revenue_amount:null,
+      revenue_currency:   f.revenue_currency,
+      revenue_rate:       f.revenue_currency==="USD"&&f.revenue_rate?+f.revenue_rate:null,
+      revenue_krw:        revKRW,
+      investment_amount:  f.investment_amount?+f.investment_amount:null,
+      investment_currency:f.investment_currency,
+      investment_rate:    f.investment_currency==="USD"&&f.investment_rate?+f.investment_rate:null,
+      investment_krw:     invKRW,
+      patent_count:       f.patent_count?+f.patent_count:null,
+      graduation_status:  f.graduation_status,
+      notes:              f.notes,
+    };
+    const {error} = existing
+      ? await sb.from("tenant_records").update(payload).eq("id",existing.id)
+      : await sb.from("tenant_records").insert(payload);
+    if (error) toast(error.message,"error");
+    else { toast("실적 저장 완료"); setRecordModal(false); fetchAll(); }
+    setSaving(false);
   };
 
-  // ── 렌더 ──
+  return (
+    <Modal open={recordModal} onClose={()=>setRecordModal(false)} title={`${tenant?.company_name||""} 실적 입력`}>
+      <FF label="연도">
+        <Sel value={f.year} onChange={v=>setF(p=>({...p,year:v}))}
+          options={[CY-2,CY-1,CY,CY+1].map(y=>({value:y,label:`${y}년`}))}/>
+      </FF>
+      <FF label="근무자 수">
+        <Inp type="number" value={f.employee_count} onChange={v=>setF(p=>({...p,employee_count:v}))} placeholder="명"/>
+      </FF>
+      <MoneyField label="매출액" amtKey="revenue_amount" curKey="revenue_currency" rateKey="revenue_rate" krwVal={revKRW} f={f} setF={setF} fmtKRW={fmtKRW}/>
+      <MoneyField label="투자유치액" amtKey="investment_amount" curKey="investment_currency" rateKey="investment_rate" krwVal={invKRW} f={f} setF={setF} fmtKRW={fmtKRW}/>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        <FF label="특허 수"><Inp type="number" value={f.patent_count} onChange={v=>setF(p=>({...p,patent_count:v}))} placeholder="건"/></FF>
+        <FF label="상태">
+          <Sel value={f.graduation_status} onChange={v=>setF(p=>({...p,graduation_status:v}))}
+            options={["재입주","졸업","퇴소","해당없음"].map(s=>({value:s,label:s}))}/>
+        </FF>
+      </div>
+      <FF label="비고"><Inp value={f.notes} onChange={v=>setF(p=>({...p,notes:v}))} placeholder="특이사항 (선택)"/></FF>
+      <Btn onClick={submit} full disabled={saving}>{saving?"저장 중...":"실적 저장"}</Btn>
+    </Modal>
+  );
+}
+
+// ── 탭6: 입주기업 관리 ────────────────────────────────────────────────
+function TenantTab({profile, toast, isMobile}) {
+  const admin = isAdmin(profile);
+  const [subTab, setSubTab]     = useState(0);
+  const [loading, setLoading]   = useState(true);
+  const [spaces, setSpaces]     = useState([]);
+  const [rooms, setRooms]       = useState([]);
+  const [tenants, setTenants]   = useState([]);
+  const [tRooms, setTRooms]     = useState([]);
+  const [records, setRecords]   = useState([]);
+  const [selSpace, setSelSpace] = useState("all");
+
+  // 모달 상태
+  const [spaceModal,  setSpaceModal]  = useState(false);
+  const [roomModal,   setRoomModal]   = useState(false);
+  const [tenantModal, setTenantModal] = useState(false);
+  const [assignModal, setAssignModal] = useState(false);
+  const [exitModal,   setExitModal]   = useState(false);
+  const [recordModal, setRecordModal] = useState(false);
+
+  // 편집 컨텍스트
+  const [editSpace,  setEditSpace]  = useState(null);
+  const [editRoom,   setEditRoom]   = useState(null);
+  const [editTenant, setEditTenant] = useState(null);
+  const [assignCtx,  setAssignCtx]  = useState(null);
+  const [exitCtx,    setExitCtx]    = useState(null);
+  const [recordCtx,  setRecordCtx]  = useState(null);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [sp, ro, te, tr, rec] = await Promise.all([
+        sb.from("spaces").select("*").order("sort_order"),
+        sb.from("rooms").select("*").order("sort_order"),
+        sb.from("tenants").select("*").order("company_name"),
+        sb.from("tenant_rooms").select("*").order("start_date"),
+        sb.from("tenant_records").select("*").order("year", {ascending:false}),
+      ]);
+      const err = sp.error||ro.error||te.error||tr.error||rec.error;
+      if (err) { toast(err.message, "error"); setLoading(false); return; }
+      setSpaces(sp.data||[]); setRooms(ro.data||[]);
+      setTenants(te.data||[]); setTRooms(tr.data||[]);
+      setRecords(rec.data||[]);
+    } catch(e) {
+      toast("데이터 로드 실패", "error");
+    }
+    setLoading(false);
+  }, [toast]);
+  useEffect(()=>{ fetchAll(); },[fetchAll]);
+
+  // 입주기업 테이블 Realtime 구독
+  const tenantFetchRef = useRef(fetchAll);
+  useEffect(()=>{ tenantFetchRef.current = fetchAll; }, [fetchAll]);
+  useEffect(()=>{
+    const ch = sb.channel("tenant-realtime")
+      .on("postgres_changes",{event:"*",schema:"public",table:"spaces"},       ()=>tenantFetchRef.current())
+      .on("postgres_changes",{event:"*",schema:"public",table:"rooms"},        ()=>tenantFetchRef.current())
+      .on("postgres_changes",{event:"*",schema:"public",table:"tenants"},      ()=>tenantFetchRef.current())
+      .on("postgres_changes",{event:"*",schema:"public",table:"tenant_rooms"}, ()=>tenantFetchRef.current())
+      .on("postgres_changes",{event:"*",schema:"public",table:"tenant_records"},()=>tenantFetchRef.current())
+      .subscribe();
+    return () => sb.removeChannel(ch);
+  }, []);
+
+  // ── 헬퍼 ──
+  const TODAY        = new Date();
+  const getDday      = d => d ? Math.ceil((new Date(d) as any - (TODAY as any))/(864e5)) : null;
+  const fmt          = d => d ? String(d).slice(0,10) : "—";
+  const fmtKRW       = v => {
+    if (!v) return "—";
+    if (v>=1e8) return `${(v/1e8).toFixed(1)}억원`;
+    if (v>=1e7) return `${(v/1e7).toFixed(0)}천만원`;
+    if (v>=1e6) return `${(v/1e6).toFixed(0)}백만원`;
+    return `${Number(v).toLocaleString()}원`;
+  };
+  const activeAsgn     = tRooms.filter(a=>!a.end_date);
+  const getRoomTenant  = rid => { const a=activeAsgn.find(x=>x.room_id===rid); return a ? tenants.find(t=>t.id===a.tenant_id) : null; };
+  const getRoomAsgn    = rid => activeAsgn.find(x=>x.room_id===rid);
+  const getTenantRooms = tid => activeAsgn.filter(a=>a.tenant_id===tid).map(a=>rooms.find(r=>r.id===a.room_id)).filter(Boolean);
+  const filteredRooms  = selSpace==="all" ? rooms : rooms.filter(r=>r.space_id===selSpace);
+  const activeRooms    = filteredRooms.filter(r=>r.status!=="비활성");
+  const occupiedRooms  = activeRooms.filter(r=>r.status==="점유");
+
+  if (loading) return <Spinner/>;
+
+  const SUB = ["호실 현황","기업 목록",...(admin?["공간·호실 설정"]:[])];
+
+  // ctx 객체 — 모든 서브컴포넌트에 단일 prop으로 전달
+  const ctx = {
+    admin, isMobile, toast, fetchAll,
+    spaces, rooms, tenants, tRooms, records,
+    activeAsgn, filteredRooms, activeRooms, occupiedRooms,
+    selSpace, setSelSpace, TODAY, getDday, fmt, fmtKRW,
+    getRoomTenant, getRoomAsgn, getTenantRooms,
+    spaceModal,  setSpaceModal,
+    roomModal,   setRoomModal,
+    tenantModal, setTenantModal,
+    assignModal, setAssignModal,
+    exitModal,   setExitModal,
+    recordModal, setRecordModal,
+    editSpace,  setEditSpace,
+    editRoom,   setEditRoom,
+    editTenant, setEditTenant,
+    assignCtx,  setAssignCtx,
+    exitCtx,    setExitCtx,
+    recordCtx,  setRecordCtx,
+  };
+
   return (
     <div>
       <div style={{display:"flex",gap:6,marginBottom:20,overflowX:"auto",paddingBottom:4}}>
@@ -1867,16 +1970,16 @@ function TenantTab({profile, toast, isMobile}) {
           <Chip key={i} label={t} active={subTab===i} onClick={()=>setSubTab(i)}/>
         ))}
       </div>
-      {subTab===0 && <ViewRooms/>}
-      {subTab===1 && <ViewTenants/>}
-      {subTab===2 && admin && <ViewSettings/>}
+      {subTab===0 && <TViewRooms ctx={ctx}/>}
+      {subTab===1 && <TViewTenants ctx={ctx}/>}
+      {subTab===2 && admin && <TViewSettings ctx={ctx}/>}
 
-      <SpaceForm/>
-      <RoomForm/>
-      <TenantForm/>
-      <AssignForm/>
-      <ExitForm/>
-      <RecordForm/>
+      <TSpaceForm  ctx={ctx}/>
+      <TRoomForm   ctx={ctx}/>
+      <TTenantForm ctx={ctx}/>
+      <TAssignForm ctx={ctx}/>
+      <TExitForm   ctx={ctx}/>
+      <TRecordForm ctx={ctx}/>
     </div>
   );
 }
@@ -1889,10 +1992,21 @@ export default function App() {
   const [tab, setTab] = useState(3);
   const [year, setYear] = useState(CY);
   const [yearOpen, setYearOpen] = useState(false);
+  const yearDropRef = useRef(null);
   const [toastMsg, setToastMsg] = useState("");
   const [toastType, setToastType] = useState("success");
   const toastTimer = useRef(null);
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640);
+
+  // 연도 드롭다운 외부 클릭 시 닫기
+  useEffect(()=>{
+    if (!yearOpen) return;
+    const handler = (e) => {
+      if (yearDropRef.current && !yearDropRef.current.contains(e.target)) setYearOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [yearOpen]);
 
   useEffect(()=>{
     const h = () => setIsMobile(window.innerWidth < 640);
@@ -1932,14 +2046,15 @@ export default function App() {
   const 미입cnt = yk.filter(k=>getSt(k)==="미입력").length;
 
   const TABS = [
-    {label:"설정",  full:"부서설정",  icon:"⚙️"},
-    {label:"등록",  full:"KPI 등록",  icon:"📋"},
-    {label:"실적",  full:"실적 입력", icon:"✏️"},
-    {label:"현황",  full:"관리 현황", icon:"📊"},
-    {label:"출력",  full:"보고자료",  icon:"📤"},
-    {label:"입주",  full:"입주기업",  icon:"🏢"},
-    ...(isAdmin(profile) ? [{label:"계정", full:"계정관리", icon:"👤"}] : []),
+    {key:"settings",  label:"설정",  full:"부서설정",  icon:"⚙️"},
+    {key:"register",  label:"등록",  full:"KPI 등록",  icon:"📋"},
+    {key:"actual",    label:"실적",  full:"실적 입력", icon:"✏️"},
+    {key:"dashboard", label:"현황",  full:"관리 현황", icon:"📊"},
+    {key:"export",    label:"출력",  full:"보고자료",  icon:"📤"},
+    {key:"tenant",    label:"입주",  full:"입주기업",  icon:"🏢"},
+    ...(isAdmin(profile) ? [{key:"account", label:"계정", full:"계정관리", icon:"👤"}] : []),
   ];
+  const tabKey = TABS[tab]?.key;
 
   const GLOBAL_STYLE = `
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
@@ -2014,7 +2129,7 @@ export default function App() {
           )}
 
           {/* 연도 선택 */}
-          <div style={{position:"relative"}}>
+          <div ref={yearDropRef} style={{position:"relative"}}>
             <button
               onClick={()=>setYearOpen(o=>!o)}
               style={{
@@ -2099,7 +2214,7 @@ export default function App() {
                   transition:"all 0.15s",
                 }}>
                   {t.full}
-                  {i===2 && 미입cnt>0 && (
+                  {t.key==="actual" && 미입cnt>0 && (
                     <span style={{position:"absolute",top:2,right:2,background:T.error,color:"#fff",borderRadius:10,fontSize:9,fontWeight:900,padding:"1px 4px"}}>{미입cnt}</span>
                   )}
                 </button>
@@ -2116,13 +2231,13 @@ export default function App() {
         margin: "0 auto",
       }}>
         {loading ? <Spinner/> : <>
-          {tab===0 && <DeptTab depts={depts} refetch={refetch} profile={profile} toast={toast}/>}
-          {tab===1 && <RegisterTab depts={depts} kpis={kpis} refetch={refetch} year={year} isMobile={isMobile} profile={profile} toast={toast}/>}
-          {tab===2 && <ActualTab depts={depts} kpis={kpis} refetch={refetch} year={year} isMobile={isMobile} profile={profile} toast={toast}/>}
-          {tab===3 && <DashTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
-          {tab===4 && <ExportTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
-          {tab===5 && <TenantTab profile={profile} toast={toast} isMobile={isMobile}/>}
-          {tab===6 && isAdmin(profile) && <AccountTab depts={depts} toast={toast}/>}
+          {tabKey==="settings"  && <DeptTab depts={depts} refetch={refetch} profile={profile} toast={toast}/>}
+          {tabKey==="register"  && <RegisterTab depts={depts} kpis={kpis} refetch={refetch} year={year} isMobile={isMobile} profile={profile} toast={toast}/>}
+          {tabKey==="actual"    && <ActualTab depts={depts} kpis={kpis} refetch={refetch} year={year} isMobile={isMobile} profile={profile} toast={toast}/>}
+          {tabKey==="dashboard" && <DashTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
+          {tabKey==="export"    && <ExportTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
+          {tabKey==="tenant"    && <TenantTab profile={profile} toast={toast} isMobile={isMobile}/>}
+          {tabKey==="account"   && isAdmin(profile) && <AccountTab depts={depts} toast={toast}/>}
         </>}
       </div>
 
@@ -2152,7 +2267,7 @@ export default function App() {
             }}>
               <span style={{fontSize:17}}>{t.icon}</span>
               <span style={{fontSize:9, fontWeight:tab===i?800:600, letterSpacing:"-0.01em"}}>{t.label}</span>
-              {i===2 && 미입cnt>0 && (
+              {t.key==="actual" && 미입cnt>0 && (
                 <span style={{position:"absolute",top:5,right:"calc(50% - 18px)",background:T.error,color:"#fff",borderRadius:10,fontSize:9,fontWeight:900,padding:"1px 5px"}}>{미입cnt}</span>
               )}
               {tab===i && (

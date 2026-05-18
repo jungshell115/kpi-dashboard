@@ -46,6 +46,11 @@ const T = {
   muted:   "#94a3b8",
 };
 
+// ── 기관 정보 ────────────────────────────────────────────────────────
+const ORG_NAME  = "충남콘텐츠진흥원";
+const ORG_DEPT  = "경영혁신본부";
+const APP_URL   = "ccon-kpi.vercel.app";
+
 // ── 상수 ────────────────────────────────────────────────────────────
 const REPORT_CYCLES = ["월별","분기별","반기별","연1회"];
 const UNITS = ["개","명","건","%","백만원","시간","회","점","개소"];
@@ -145,8 +150,14 @@ function exportHTML(kpis, depts, year) {
 </style></head><body>
 <div style="background:#fff;border-radius:16px;padding:32px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.10)">
 <div style="text-align:center;margin-bottom:32px;padding-bottom:24px;border-bottom:2px solid #4338CA">
-  <div style="color:rgba(0,0,0,0.54);font-size:13px;margin-bottom:6px">충남도 출연기관 · 경영혁신본부</div>
-  <h1 style="font-size:24px;font-weight:900;color:#18181B;margin-bottom:6px">${year}년 KPI 성과 현황 보고서</h1>
+  <div style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:10px">
+    <div style="width:40px;height:40px;background:#18181B;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:18px;flex-shrink:0">C</div>
+    <div style="text-align:left">
+      <div style="font-weight:900;font-size:16px;color:#18181B">${ORG_NAME}</div>
+      <div style="color:rgba(0,0,0,0.45);font-size:11px">${ORG_DEPT}</div>
+    </div>
+  </div>
+  <h1 style="font-size:22px;font-weight:900;color:#18181B;margin-bottom:6px">${year}년 KPI 성과 현황 보고서</h1>
   <div style="color:rgba(0,0,0,0.38);font-size:13px">기준일: ${today}</div>
 </div>
 <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:28px">
@@ -236,6 +247,39 @@ function copyReportText(kpis, depts, year) {
     txt += "\n";
   });
   navigator.clipboard.writeText(txt).catch(() => alert("클립보드 복사 실패"));
+}
+
+function copyKakaoMsg(kpis, depts, year) {
+  const today = new Date().toLocaleDateString("ko-KR");
+  const yk = kpis.filter(k => k.year === year);
+
+  // 부서별 미입력 KPI 수집
+  const byDept: {name:string; items:{project:string;name:string}[]}[] = [];
+  depts.forEach(d => {
+    const unentered = yk.filter(k => k.dept_id === d.id && getSt(k) === "미입력");
+    if (unentered.length > 0) byDept.push({name: d.name, items: unentered.map(k=>({project:k.project, name:k.name}))});
+  });
+
+  if (byDept.length === 0) {
+    alert("✅ 모든 KPI 실적이 입력되어 있습니다!");
+    return;
+  }
+
+  const total = byDept.reduce((s,d)=>s+d.items.length, 0);
+  let txt = `📊 [KPI 실적입력 요청]\n${ORG_NAME} ${ORG_DEPT}\n\n`;
+  txt += `안녕하세요! ${year}년 KPI 실적 미입력 현황을 안내드립니다.\n\n`;
+  txt += `⚠️ 미입력 현황 (기준일: ${today})\n총 ${total}건\n\n`;
+  byDept.forEach(d => {
+    txt += `▶ ${d.name} (${d.items.length}건)\n`;
+    d.items.forEach(k => { txt += `  · ${k.project} — ${k.name}\n`; });
+    txt += "\n";
+  });
+  txt += `📎 실적 입력 바로가기\nhttps://${APP_URL}\n\n`;
+  txt += `빠른 입력 부탁드립니다 🙏\n감사합니다.`;
+
+  navigator.clipboard.writeText(txt)
+    .then(()=> alert(`✅ 카카오톡 문구가 복사되었습니다!\n카카오톡에 붙여넣기(Ctrl+V / ⌘+V) 해주세요.`))
+    .catch(()=> alert("클립보드 복사 실패. 브라우저 권한을 확인해주세요."));
 }
 
 // ── 공통 UI 컴포넌트 ─────────────────────────────────────────────────
@@ -500,17 +544,15 @@ function LoginPage({onLogin}) {
       }}>
         {/* 로고 영역 */}
         <div style={{textAlign:"center", marginBottom:32}}>
-          <div style={{
-            width: 64, height: 64, borderRadius: "50%",
-            background: T.houseGreen,
-            display: "flex", alignItems: "center", justifyContent: "center",
-            margin: "0 auto 14px", fontSize: 28,
-          }}>⚡</div>
-          <div style={{color:T.sbGreen, fontWeight:900, fontSize:22, marginBottom:4, letterSpacing:"-0.01em"}}>
+          <img src="/logo-full.png" alt={ORG_NAME}
+            style={{height:48, objectFit:"contain", marginBottom:16, display:"block", margin:"0 auto 16px"}}
+            onError={e=>{(e.target as HTMLImageElement).style.display="none";}}
+          />
+          <div style={{color:T.sbGreen, fontWeight:900, fontSize:20, marginBottom:4, letterSpacing:"-0.02em"}}>
             KPI 성과관리
           </div>
           <div style={{color:T.text38, fontSize:12, letterSpacing:"-0.01em"}}>
-            충남도 출연기관 · 경영혁신본부
+            {ORG_DEPT}
           </div>
         </div>
 
@@ -1113,6 +1155,7 @@ function DashTab({depts, kpis, year, isMobile}) {
 // ── 탭4: 보고자료 출력 ────────────────────────────────────────────────
 function ExportTab({depts, kpis, year, isMobile}) {
   const [copied, setCopied] = useState(false);
+  const [kakaoMsg, setKakaoMsg] = useState("");
   const yk = kpis.filter(k=>k.year===year);
   const 달 = yk.filter(k=>getSt(k)==="달성").length;
   const 미달 = yk.filter(k=>getSt(k)==="미달").length;
@@ -1122,6 +1165,32 @@ function ExportTab({depts, kpis, year, isMobile}) {
     copyReportText(kpis, depts, year);
     setCopied(true);
     setTimeout(()=>setCopied(false), 2000);
+  };
+
+  // 카카오톡 독촉 문구 생성 + 미리보기
+  const genKakaoMsg = () => {
+    const today = new Date().toLocaleDateString("ko-KR");
+    const byDept: {name:string; items:{project:string;name:string}[]}[] = [];
+    depts.forEach(d => {
+      const unentered = yk.filter(k => k.dept_id === d.id && getSt(k) === "미입력");
+      if (unentered.length > 0) byDept.push({name:d.name, items:unentered.map(k=>({project:k.project,name:k.name}))});
+    });
+    if (byDept.length === 0) { setKakaoMsg("✅ 모든 KPI 실적이 입력되어 있습니다!"); return; }
+    const total = byDept.reduce((s,d)=>s+d.items.length, 0);
+    let txt = `📊 [KPI 실적입력 요청]\n${ORG_NAME} ${ORG_DEPT}\n\n`;
+    txt += `안녕하세요! ${year}년 KPI 실적 미입력 현황을 안내드립니다.\n\n`;
+    txt += `⚠️ 미입력 현황 (기준일: ${today})\n총 ${total}건\n\n`;
+    byDept.forEach(d => {
+      txt += `▶ ${d.name} (${d.items.length}건)\n`;
+      d.items.forEach(k => { txt += `  · ${k.project} — ${k.name}\n`; });
+      txt += "\n";
+    });
+    txt += `📎 실적 입력: https://${APP_URL}\n\n빠른 입력 부탁드립니다 🙏\n감사합니다.`;
+    setKakaoMsg(txt);
+  };
+  const copyKakao = () => {
+    if (!kakaoMsg) return;
+    navigator.clipboard.writeText(kakaoMsg).then(()=>alert("✅ 복사 완료! 카카오톡에 붙여넣기 하세요.")).catch(()=>{});
   };
 
   const ExCard = ({icon, title, desc, onClick, color=T.greenAccent, tag}) => (
@@ -1167,6 +1236,51 @@ function ExportTab({depts, kpis, year, isMobile}) {
         <ExCard icon="📊" title="KPI 현황 CSV" desc="부서별 KPI 요약표 · 엑셀에서 바로 열기" onClick={()=>exportCSV(kpis,depts,year)} color={T.success} tag="엑셀"/>
         <ExCard icon="📋" title="실적 상세 CSV" desc="기간별 실적 이력 전체 · 증빙·비고 포함" onClick={()=>exportDetailCSV(kpis,depts,year)} color="#0ea5e9" tag="엑셀"/>
         <ExCard icon="📝" title="보고문 복사" desc="이사회·도청 보고용 텍스트 · 한 번에 복사" onClick={handleCopy} color={copied?T.success:T.warn} tag={copied?"✓ 복사됨":"클립보드"}/>
+      </div>
+
+      {/* 카카오톡 독촉 문구 */}
+      <div style={{
+        background:"linear-gradient(135deg,#FEE500 0%,#F5D800 100%)",
+        borderRadius:14,
+        padding:"16px 18px",
+        marginBottom:24,
+        border:"1px solid #E6C800",
+      }}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+          <span style={{fontSize:24}}>💬</span>
+          <div>
+            <div style={{fontWeight:800,fontSize:15,color:"#391B1B",letterSpacing:"-0.01em"}}>카카오톡 실적입력 독촉 문구</div>
+            <div style={{fontSize:12,color:"rgba(57,27,27,0.65)",letterSpacing:"-0.01em"}}>미입력 KPI 담당자에게 복사해서 보내세요</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8}}>
+          <Btn onClick={genKakaoMsg} color="#391B1B" style={{flex:1,padding:"10px 0",fontSize:13}}>
+            📋 문구 생성
+          </Btn>
+          {kakaoMsg && (
+            <Btn onClick={copyKakao} color="#391B1B" style={{flex:1,padding:"10px 0",fontSize:13}}>
+              ✅ 복사하기
+            </Btn>
+          )}
+        </div>
+        {kakaoMsg && (
+          <div style={{
+            marginTop:12,
+            background:"rgba(255,255,255,0.7)",
+            borderRadius:10,
+            padding:"12px 14px",
+            fontFamily:"'Apple SD Gothic Neo','Noto Sans KR',sans-serif",
+            fontSize:12,
+            color:"#391B1B",
+            lineHeight:1.8,
+            whiteSpace:"pre-wrap",
+            maxHeight:220,
+            overflowY:"auto",
+            letterSpacing:"-0.01em",
+          }}>
+            {kakaoMsg}
+          </div>
+        )}
       </div>
 
       <STitle>📄 보고문 미리보기</STitle>
@@ -2124,12 +2238,18 @@ export default function App() {
         boxShadow: "0 1px 8px rgba(0,0,0,0.20)",
       }}>
         {/* 로고 */}
-        <div>
-          <div style={{fontSize:isMobile?15:17, fontWeight:900, color:"#fff", letterSpacing:"-0.02em"}}>
-            KPI 성과관리
-          </div>
-          <div style={{color:"rgba(255,255,255,0.45)", fontSize:10, letterSpacing:"-0.01em"}}>
-            충남도 출연기관 · 경영혁신본부
+        <div style={{display:"flex", alignItems:"center", gap:10}}>
+          <img src="/logo.png" alt={ORG_NAME}
+            style={{height:isMobile?30:36, objectFit:"contain", filter:"brightness(0) invert(1)", flexShrink:0}}
+            onError={e=>{(e.target as HTMLImageElement).style.display="none";}}
+          />
+          <div>
+            <div style={{fontSize:isMobile?14:16, fontWeight:900, color:"#fff", letterSpacing:"-0.02em"}}>
+              {isMobile ? "KPI 관리" : "KPI 성과관리"}
+            </div>
+            <div style={{color:"rgba(255,255,255,0.45)", fontSize:9, letterSpacing:"-0.01em"}}>
+              {ORG_NAME} · {ORG_DEPT}
+            </div>
           </div>
         </div>
 

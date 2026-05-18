@@ -1,0 +1,5 @@
+[project]
+id = "jvjsgapxykuixwkseyqw"
+
+[functions.slack-kpi-alert]
+verify_jwt = false

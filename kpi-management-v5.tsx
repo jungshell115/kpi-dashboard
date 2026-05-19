@@ -120,7 +120,7 @@ function exportHTML(kpis, depts, year) {
         <td style="text-align:center;color:#64748b;font-size:12px">${escHtml(k.manager)}</td>
       </tr>`;
     }).join("");
-    return `<div style="margin-bottom:28px">
+    return `<div class="dept-section" style="margin-bottom:28px">
       <div style="display:flex;align-items:center;justify-content:space-between;background:#EEF2FF;padding:10px 16px;border-radius:10px;margin-bottom:10px;border-left:4px solid #4338CA">
         <h3 style="margin:0;color:#18181B;font-size:15px;font-weight:800">${d.name}</h3>
         <span style="font-weight:900;color:#6366F1;font-size:20px">${dAvg !== null ? dAvg+"%" : "-"}</span>
@@ -146,7 +146,7 @@ function exportHTML(kpis, depts, year) {
   *{margin:0;padding:0;box-sizing:border-box}
   body{font-family:'Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:rgba(0,0,0,0.87);background:#FAFAFA;padding:40px;max-width:980px;margin:0 auto}
   table td,table th{padding:9px 10px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
-  @media print{body{padding:20px;background:#fff}.no-print{display:none!important}@page{size:A4;margin:15mm}}
+  @media print{body{padding:10px;background:#fff}.no-print{display:none!important}@page{size:A4;margin:10mm}table{page-break-inside:avoid}.dept-section{page-break-inside:avoid}h2,h3{page-break-after:avoid}}
 </style></head><body>
 <div style="background:#fff;border-radius:16px;padding:32px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.10)">
 <div style="text-align:center;margin-bottom:32px;padding-bottom:24px;border-bottom:2px solid #4338CA">
@@ -768,7 +768,37 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
   const [search, setSearch] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const set = useCallback((k,v) => setForm(f=>({...f,[k]:v})), []);
+
+  const importCSV = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const lines = text.split("\n").filter(l=>l.trim());
+      const dataLines = lines[0].includes("부서명") ? lines.slice(1) : lines;
+      let ok=0, fail=0;
+      for (const line of dataLines) {
+        const cols = line.split(",").map(c=>c.replace(/^"|"$/g,"").trim());
+        const [deptName, project, name, targetStr, unit, cycle, manager, thresholdStr] = cols;
+        if (!deptName || !name) continue;
+        const dept = depts.find(d=>d.name===deptName);
+        if (!dept) { fail++; continue; }
+        const {error} = await sb.from("kpis").insert({
+          dept_id: dept.id, project: project||"", name,
+          target: parseFloat(targetStr)||0, unit: unit||"개",
+          cycle: cycle||"분기별", manager: manager||"",
+          threshold: parseFloat(thresholdStr)||100, year,
+        });
+        if (error) fail++; else ok++;
+      }
+      toast(`✅ ${ok}개 등록 완료${fail>0?` (${fail}개 실패)`:""}`, ok>0?"success":"error");
+      if (ok>0) refetch();
+    } catch(err: any) { toast("파일 읽기 실패: "+(err?.message||"오류"), "error"); }
+    setImporting(false);
+    e.target.value = "";
+  }, [depts, year, toast, refetch]);
 
   const allowedDepts = isAdmin(profile) ? depts : depts.filter(d => d.id === profile?.dept_id);
 
@@ -854,6 +884,34 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
 
       <div style={isMobile ? {} : {marginLeft:320}}>
         {isMobile && <div style={{color:T.text38,fontSize:12,marginBottom:10,letterSpacing:"-0.01em"}}>{year}년 {filtered.length}개 KPI</div>}
+
+        {/* CSV 일괄 업로드 */}
+        {isAdmin(profile) && (
+          <Card style={{padding:"16px 18px",marginBottom:16,borderLeft:`4px solid ${T.success}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <span style={{fontSize:20}}>📥</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:T.text87}}>CSV 일괄 등록</div>
+                <div style={{fontSize:11,color:T.text38}}>부서명,사업명,KPI명,목표값,단위,주기,담당자,달성기준</div>
+              </div>
+            </div>
+            <input
+              type="file" accept=".csv" onChange={importCSV} disabled={importing}
+              style={{
+                display:"block", width:"100%",
+                padding:"10px", border:`1px solid ${T.border2}`,
+                borderRadius:50, cursor:"pointer",
+                fontSize:13, color:T.text54, fontWeight:700,
+                background:"#fff",
+              }}
+            />
+            <div style={{fontSize:10,color:T.text38,marginTop:6}}>
+              * 첫 행이 헤더인 경우 자동 무시 · 부서명은 정확히 일치해야 합니다
+              {importing && <span style={{color:T.greenAccent,fontWeight:700,marginLeft:8}}>등록 중...</span>}
+            </div>
+          </Card>
+        )}
+
         {filtered.length === 0
           ? <div style={{color:T.text38,textAlign:"center",padding:60,letterSpacing:"-0.01em"}}>등록된 KPI가 없습니다</div>
           : filtered.map(kpi => {
@@ -1047,6 +1105,65 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
   );
 }
 
+// ── SVG 차트 컴포넌트 ─────────────────────────────────────────────────
+function SvgBarChart({data}: {data:{name:string, value:number|null, color:string}[]}) {
+  const W = 280, barH = 28, gap = 10;
+  const max = Math.max(...data.map(d=>d.value||0), 100);
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${data.length*(barH+gap)}`} style={{display:"block"}}>
+      {data.map((d,i)=>{
+        const y = i*(barH+gap);
+        const w = d.value ? Math.round((d.value/max)*200) : 0;
+        return (
+          <g key={d.name}>
+            <text x={0} y={y+barH*0.72} fontSize={11} fill="rgba(0,0,0,0.54)" fontFamily="inherit">{d.name}</text>
+            <rect x={80} y={y+4} width={200} height={barH-8} rx={4} fill="#f1f5f9"/>
+            <rect x={80} y={y+4} width={w} height={barH-8} rx={4} fill={d.color} opacity={0.85}/>
+            <text x={80+w+6} y={y+barH*0.72} fontSize={11} fontWeight={700} fill={d.value!==null?d.color:"#94a3b8"} fontFamily="inherit">
+              {d.value !== null ? `${d.value}%` : "-"}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function SvgLineChart({periods, series}: {periods:string[], series:{name:string, values:(number|null)[], color:string}[]}) {
+  const W=300, H=100, padL=30, padB=24, padT=10;
+  const chartW=W-padL-10, chartH=H-padB-padT;
+  const max=100;
+  const xStep = periods.length>1 ? chartW/(periods.length-1) : chartW;
+
+  const toY = (v:number|null) => v===null ? null : padT + chartH - (v/max)*chartH;
+  const toX = (i:number) => padL + i*xStep;
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{display:"block"}}>
+      <line x1={padL} y1={padT+chartH} x2={W-10} y2={padT+chartH} stroke="#e5e7eb" strokeWidth={1}/>
+      <line x1={padL} y1={padT} x2={W-10} y2={padT} stroke="#e5e7eb" strokeWidth={0.5} strokeDasharray="4,4"/>
+      <text x={padL-3} y={padT+5} fontSize={9} fill="#94a3b8" textAnchor="end">100%</text>
+      <text x={padL-3} y={padT+chartH+4} fontSize={9} fill="#94a3b8" textAnchor="end">0%</text>
+      {periods.map((p,i)=>(
+        <text key={p} x={toX(i)} y={H-6} fontSize={9} fill="#94a3b8" textAnchor="middle">{p}</text>
+      ))}
+      {series.map(s=>{
+        const pts = s.values.map((v,i)=>[toX(i), toY(v)] as [number,number|null]).filter(([,y])=>y!==null) as [number,number][];
+        if (pts.length < 2) return null;
+        const d = pts.map((p,i)=>`${i===0?"M":"L"}${p[0]},${p[1]}`).join(" ");
+        return (
+          <g key={s.name}>
+            <path d={d} fill="none" stroke={s.color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round"/>
+            {pts.map(([x,y],i)=>(
+              <circle key={i} cx={x} cy={y} r={3} fill={s.color}/>
+            ))}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 // ── 탭3: 관리 현황 ────────────────────────────────────────────────────
 function DashTab({depts, kpis, year, isMobile}) {
   const yk = useMemo(()=>kpis.filter(k=>k.year===year),[kpis,year]);
@@ -1071,6 +1188,34 @@ function DashTab({depts, kpis, year, isMobile}) {
   const 미입K = yk.filter(k=>getSt(k)==="미입력");
   const overall = stats.t>0 ? Math.round((stats.달/stats.t)*100) : 0;
   const overallStatus = overall>=70?"달성":overall>=50?"진행중":"미달";
+
+  // 분기별 KPI 달성 추이 데이터
+  const trendData = useMemo(()=>{
+    const qKpis = yk.filter(k=>k.cycle==="분기별"&&k.records?.length>0);
+    if (!qKpis.length) return null;
+    const vals = QUARTERS.map(q=>{
+      const rates = qKpis.map(k=>{
+        const r = k.records.find(r=>r.period===q);
+        return r ? Math.round(r.actual/k.target*100) : null;
+      }).filter(r=>r!==null) as number[];
+      return rates.length ? Math.round(rates.reduce((a,b)=>a+b,0)/rates.length) : null;
+    });
+    return vals;
+  },[yk]);
+
+  // 전년도 KPI 데이터 (DashTab 내부 fetch)
+  const [prevKpis, setPrevKpis] = useState<any[]>([]);
+  useEffect(()=>{
+    sb.from("kpis").select("*, kpi_records(*)").eq("year", year-1)
+      .then(({data})=>{ if(data) setPrevKpis(data.map(k=>({...k,records:(k as any).kpi_records||[]}))); });
+  },[year]);
+
+  const prevStats = useMemo(()=>{
+    if (!prevKpis.length) return null;
+    const t=prevKpis.length;
+    const 달=prevKpis.filter(k=>getSt(k)==="달성").length;
+    return {t, 달, rate: t>0?Math.round(달/t*100):0};
+  },[prevKpis]);
 
   return (
     <div>
@@ -1098,7 +1243,7 @@ function DashTab({depts, kpis, year, isMobile}) {
         {ds.map(d=>(
           <Card key={d.id} style={{padding:"14px 16px"}}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:d.total>0?8:0}}>
-              <span style={{color:T.text87,fontWeight:700,fontSize:13,flex:1,letterSpacing:"-0.01em"}}>{d.name}</span>
+              <span style={{color:T.text87,fontWeight:700,fontSize:13,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-0.01em"}}>{d.name}</span>
               <span style={{color:d.avg!==null?T.greenAccent:T.text38,fontWeight:900,fontSize:17,letterSpacing:"-0.01em"}}>
                 {d.avg !== null ? `${d.avg}%` : "-"}
               </span>
@@ -1118,6 +1263,51 @@ function DashTab({depts, kpis, year, isMobile}) {
           </Card>
         ))}
       </div>
+
+      {/* 부서별 달성률 바 차트 */}
+      {ds.some(d=>d.avg!==null) && (
+        <Card style={{padding:"18px",marginBottom:18}}>
+          <div style={{fontWeight:700,fontSize:13,color:T.sbGreen,marginBottom:12}}>📊 부서별 달성률</div>
+          <SvgBarChart data={ds.map(d=>({
+            name: d.name,
+            value: d.avg,
+            color: d.avg===null ? T.muted : d.avg>=70 ? T.success : d.avg>=50 ? T.warn : T.error,
+          }))}/>
+        </Card>
+      )}
+
+      {/* 분기별 KPI 달성 추이 */}
+      {trendData && trendData.some(v=>v!==null) && (
+        <Card style={{padding:"18px",marginBottom:18}}>
+          <div style={{fontWeight:700,fontSize:13,color:T.sbGreen,marginBottom:12}}>📈 분기별 KPI 달성률 추이</div>
+          <SvgLineChart
+            periods={QUARTERS}
+            series={[{name:"달성률 평균", values:trendData, color:T.greenAccent}]}
+          />
+        </Card>
+      )}
+
+      {/* 전년도 vs 올해 비교 */}
+      {prevStats && (
+        <Card style={{padding:"16px 18px",marginBottom:18,borderLeft:`4px solid ${T.muted}`}}>
+          <div style={{fontWeight:700,fontSize:13,color:T.text54,marginBottom:10}}>📅 {year-1}년 vs {year}년 비교</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <div style={{textAlign:"center",padding:"10px",background:T.surfaceAlt,borderRadius:10}}>
+              <div style={{color:T.text38,fontSize:11,marginBottom:4}}>{year-1}년 달성률</div>
+              <div style={{fontWeight:900,fontSize:22,color:T.muted}}>{prevStats.rate}%</div>
+              <div style={{color:T.text38,fontSize:11}}>{prevStats.달}/{prevStats.t}개 달성</div>
+            </div>
+            <div style={{textAlign:"center",padding:"10px",background:T.lightGreen,borderRadius:10}}>
+              <div style={{color:T.text38,fontSize:11,marginBottom:4}}>{year}년 달성률</div>
+              <div style={{fontWeight:900,fontSize:22,color:T.greenAccent}}>{overall}%</div>
+              <div style={{color:T.text38,fontSize:11}}>{stats.달}/{stats.t}개 달성</div>
+            </div>
+          </div>
+          <div style={{textAlign:"center",marginTop:10,fontSize:12,fontWeight:700,color:overall>=prevStats.rate?T.success:T.error}}>
+            {overall>=prevStats.rate?"▲":"▼"} {Math.abs(overall-prevStats.rate)}%p {overall>=prevStats.rate?"향상":"감소"}
+          </div>
+        </Card>
+      )}
 
       {미달K.length > 0 && <>
         <STitle color={T.error}>🔴 미달 KPI ({미달K.length}개)</STitle>
@@ -2099,8 +2289,34 @@ function TenantTab({profile, toast, isMobile}) {
     recordCtx,  setRecordCtx,
   };
 
+  // 입주기업 통계 계산
+  const tenantStats = useMemo(()=>{
+    const totalRev = records.reduce((s,r)=>s+(r.revenue_krw||0),0);
+    const totalInv = records.reduce((s,r)=>s+(r.investment_krw||0),0);
+    const totalEmp = records.reduce((s,r)=>s+(r.employee_count||0),0);
+    const activeTenants = [...new Set(activeAsgn.map(a=>a.tenant_id))].length;
+    const occupancyRate = activeRooms.length ? Math.round(occupiedRooms.length/activeRooms.length*100) : 0;
+    return {totalRev, totalInv, totalEmp, activeTenants, occupancyRate};
+  },[records, activeAsgn, activeRooms, occupiedRooms]);
+
   return (
     <div>
+      {/* 입주기업 통계 카드 패널 */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+        {([
+          ["입주기업", `${tenantStats.activeTenants}개사`, T.sbGreen],
+          ["공간점유율", `${tenantStats.occupancyRate}%`, T.greenAccent],
+          ["누적매출", tenantStats.totalRev>0?`${(tenantStats.totalRev/100000000).toFixed(1)}억`:"—", T.success],
+          ["투자유치", tenantStats.totalInv>0?`${(tenantStats.totalInv/100000000).toFixed(1)}억`:"—", "#8b5cf6"],
+          ["고용인원", tenantStats.totalEmp>0?`${tenantStats.totalEmp}명`:"—", T.warn],
+        ] as [string,string,string][]).map(([l,v,c])=>(
+          <Card key={l} style={{padding:"10px 12px",textAlign:"center"}}>
+            <div style={{color:T.text38,fontSize:10,marginBottom:2,letterSpacing:"-0.01em"}}>{l}</div>
+            <div style={{fontWeight:900,fontSize:17,color:c}}>{v}</div>
+          </Card>
+        ))}
+      </div>
+
       <div style={{display:"flex",gap:6,marginBottom:20,overflowX:"auto",paddingBottom:4}}>
         {SUB.map((t,i)=>(
           <Chip key={i} label={t} active={subTab===i} onClick={()=>setSubTab(i)}/>

@@ -2452,6 +2452,16 @@ function TenantTab({profile, toast, isMobile}) {
   const activeRooms    = filteredRooms.filter(r=>r.status!=="비활성");
   const occupiedRooms  = activeRooms.filter(r=>r.status==="점유");
 
+  // 입주기업 통계 계산 — early return 전에 위치해야 hooks 규칙 준수
+  const tenantStats = useMemo(()=>{
+    const totalRev = records.reduce((s,r)=>s+(r.revenue_krw||0),0);
+    const totalInv = records.reduce((s,r)=>s+(r.investment_krw||0),0);
+    const totalEmp = records.reduce((s,r)=>s+(r.employee_count||0),0);
+    const activeTenants = [...new Set(activeAsgn.map(a=>a.tenant_id))].length;
+    const occupancyRate = activeRooms.length ? Math.round(occupiedRooms.length/activeRooms.length*100) : 0;
+    return {totalRev, totalInv, totalEmp, activeTenants, occupancyRate};
+  },[records, activeAsgn, activeRooms, occupiedRooms]);
+
   if (loading) return <Spinner/>;
 
   const SUB = ["호실 현황","기업 목록",...(admin?["공간·호실 설정"]:[])];
@@ -2476,16 +2486,6 @@ function TenantTab({profile, toast, isMobile}) {
     exitCtx,    setExitCtx,
     recordCtx,  setRecordCtx,
   };
-
-  // 입주기업 통계 계산
-  const tenantStats = useMemo(()=>{
-    const totalRev = records.reduce((s,r)=>s+(r.revenue_krw||0),0);
-    const totalInv = records.reduce((s,r)=>s+(r.investment_krw||0),0);
-    const totalEmp = records.reduce((s,r)=>s+(r.employee_count||0),0);
-    const activeTenants = [...new Set(activeAsgn.map(a=>a.tenant_id))].length;
-    const occupancyRate = activeRooms.length ? Math.round(occupiedRooms.length/activeRooms.length*100) : 0;
-    return {totalRev, totalInv, totalEmp, activeTenants, occupancyRate};
-  },[records, activeAsgn, activeRooms, occupiedRooms]);
 
   return (
     <div>

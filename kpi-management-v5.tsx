@@ -49,7 +49,7 @@ const T = {
 // ── 기관 정보 ────────────────────────────────────────────────────────
 const ORG_NAME  = "충남콘텐츠진흥원";
 const ORG_DEPT  = "경영혁신본부";
-const APP_URL   = "ccon-kpi.vercel.app";
+const APP_URL   = "kpi-dashboard-zeta-lyart.vercel.app";
 
 // ── 상수 ────────────────────────────────────────────────────────────
 const REPORT_CYCLES = ["월별","분기별","반기별","연1회"];

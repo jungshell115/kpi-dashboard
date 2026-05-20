@@ -1655,6 +1655,38 @@ function ExportTab({depts, kpis, year, isMobile}) {
 }
 
 // ── 탭5: 계정 관리 (admin 전용) ───────────────────────────────────────
+function PasswordChangeCard({toast}) {
+  const [newPw,  setNewPw]  = useState("");
+  const [newPw2, setNewPw2] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!newPw || newPw.length < 6) { toast("비밀번호는 6자 이상이어야 합니다","error"); return; }
+    if (newPw !== newPw2)           { toast("비밀번호가 일치하지 않습니다","error"); return; }
+    setSaving(true);
+    const {error} = await sb.auth.updateUser({password: newPw});
+    setSaving(false);
+    if (error) toast(error.message,"error");
+    else { toast("비밀번호가 변경됐습니다 🎉"); setNewPw(""); setNewPw2(""); }
+  };
+
+  return (
+    <Card style={{padding:16, marginBottom:20}} accent accentColor={T.greenAccent}>
+      <STitle>🔑 내 비밀번호 변경</STitle>
+      <FF label="새 비밀번호">
+        <Inp type="password" value={newPw} onChange={setNewPw} placeholder="6자 이상"/>
+      </FF>
+      <FF label="새 비밀번호 확인">
+        <Inp type="password" value={newPw2} onChange={setNewPw2} placeholder="동일하게 입력"
+          onKeyDown={e=>{if(e.key==="Enter") submit();}}/>
+      </FF>
+      <Btn onClick={submit} full disabled={saving}>
+        {saving ? "변경 중..." : "비밀번호 변경"}
+      </Btn>
+    </Card>
+  );
+}
+
 function AccountTab({depts, toast}) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1679,6 +1711,7 @@ function AccountTab({depts, toast}) {
   if (loading) return <Spinner/>;
   return (
     <div>
+      <PasswordChangeCard toast={toast}/>
       <STitle>계정 관리</STitle>
       <div style={{color:T.text54,fontSize:12,marginBottom:18,letterSpacing:"-0.01em",lineHeight:1.7}}>
         가입한 사용자에게 역할(admin/member)과 소속 부서를 지정하세요.<br/>

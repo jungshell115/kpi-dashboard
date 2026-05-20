@@ -12,6 +12,7 @@
 
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import * as XLSX from "xlsx";
 
 // ── Supabase 클라이언트 ──────────────────────────────────────────────
 const SUPABASE_URL  = import.meta.env?.VITE_SUPABASE_URL  || "YOUR_SUPABASE_URL";
@@ -2106,7 +2107,12 @@ function TViewTenants({ctx}: any) {
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
         <STitle>입주기업 ({tenants.length}개)</STitle>
-        {admin && <Btn onClick={()=>{setEditTenant(null);setTenantModal(true);}}>+ 기업 추가</Btn>}
+        {admin && (
+          <div style={{display:"flex",gap:6}}>
+            <Btn variant="outline" onClick={()=>ctx.setImportModal(true)} style={{fontSize:12,padding:"6px 12px"}}>📥 엑셀 일괄 등록</Btn>
+            <Btn onClick={()=>{setEditTenant(null);setTenantModal(true);}}>+ 기업 추가</Btn>
+          </div>
+        )}
       </div>
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {tenants.map(t=>{
@@ -2538,6 +2544,278 @@ function TRecordForm({ctx}: any) {
 }
 
 // ── 탭6: 입주기업 관리 ────────────────────────────────────────────────
+// ── 엑셀 일괄 등록 모달 ──────────────────────────────────────────────
+function TenantImportModal({open, onClose, rooms, tenants, toast, fetchAll}: any) {
+  const [step, setStep]       = useState<"upload"|"preview"|"done">("upload");
+  const [preview, setPreview] = useState<any>(null);   // {companies, assignments, records, errors}
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // 모달 열릴 때 상태 초기화
+  useEffect(() => {
+    if (open) { setStep("upload"); setPreview(null); }
+  }, [open]);
+
+  const parseFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, {type:"array"});
+        const errors: string[] = [];
+
+        // ── Sheet 1: 기업정보 ──
+        const ws1 = wb.Sheets["1_기업정보"];
+        const raw1: any[][] = ws1 ? XLSX.utils.sheet_to_json(ws1, {header:1, defval:""}) : [];
+        // 상단 5행(제목·부제목·헤더·예시2행) 건너뜀, 빈 행 제거
+        const companies = raw1.slice(5)
+          .filter(r => String(r[0]||"").trim())
+          .map((r, i) => {
+            const name = String(r[0]).trim();
+            return {
+              company_name:    name,
+              ceo_name:        String(r[1]||"").trim() || null,
+              business_type:   String(r[2]||"").trim() || null,
+              contact:         String(r[3]||"").trim() || null,
+              registration_no: String(r[4]||"").trim() || null,
+              notes:           String(r[5]||"").trim() || null,
+              _row: i + 6,
+            };
+          });
+        if (!companies.length) errors.push("시트1(기업정보)에 입력된 기업이 없습니다.");
+
+        // 중복 기업명 검사
+        const nameSet = new Set<string>();
+        companies.forEach(c => {
+          if (nameSet.has(c.company_name)) errors.push(`시트1 ${c._row}행: "${c.company_name}" 기업명 중복`);
+          nameSet.add(c.company_name);
+        });
+        // 이미 DB에 있는 기업명 표시 (경고, 업데이트 처리)
+        const existingNames = new Set(tenants.map((t:any) => t.company_name));
+
+        // ── Sheet 2: 입주현황 ──
+        const ws2 = wb.Sheets["2_입주현황"];
+        const raw2: any[][] = ws2 ? XLSX.utils.sheet_to_json(ws2, {header:1, defval:""}) : [];
+        const assignments = raw2.slice(5)
+          .filter(r => String(r[0]||"").trim() && String(r[1]||"").trim())
+          .map((r, i) => {
+            const companyName = String(r[0]).trim();
+            const roomNo      = String(r[1]).trim();
+            const startDate   = String(r[3]||"").trim();
+            if (!startDate) errors.push(`시트2 ${i+6}행: "${companyName}" 입주일이 없습니다.`);
+            // 날짜 형식 검증
+            if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate))
+              errors.push(`시트2 ${i+6}행: 입주일 형식 오류 (YYYY-MM-DD) → "${startDate}"`);
+            // 호실 존재 여부 확인
+            const matchedRoom = rooms.find((rm:any) => rm.room_no === roomNo);
+            if (!matchedRoom) errors.push(`시트2 ${i+6}행: 호실 "${roomNo}" 이(가) 시스템에 없습니다.`);
+            return {
+              company_name:  companyName,
+              room_no:       roomNo,
+              room_id:       matchedRoom?.id || null,
+              project_name:  String(r[2]||"").trim() || null,
+              start_date:    startDate,
+              expected_end:  String(r[4]||"").trim() || null,
+              _row: i + 6,
+            };
+          });
+
+        // ── Sheet 3: 연간실적 ──
+        const ws3 = wb.Sheets["3_연간실적"];
+        const raw3: any[][] = ws3 ? XLSX.utils.sheet_to_json(ws3, {header:1, defval:""}) : [];
+        const records = raw3.slice(5)
+          .filter(r => String(r[0]||"").trim() && r[1])
+          .map((r, i) => {
+            const companyName = String(r[0]).trim();
+            const year        = Number(r[1]);
+            if (!year || isNaN(year)) errors.push(`시트3 ${i+6}행: 연도가 올바르지 않습니다 → "${r[1]}"`);
+            const revAmt  = r[2] ? Number(String(r[2]).replace(/,/g,"")) : null;
+            const revCur  = String(r[3]||"KRW").trim().toUpperCase();
+            const revRate = r[4] ? Number(r[4]) : null;
+            const invAmt  = r[5] ? Number(String(r[5]).replace(/,/g,"")) : null;
+            const invCur  = String(r[6]||"KRW").trim().toUpperCase();
+            const invRate = r[7] ? Number(r[7]) : null;
+            // USD인데 환율 없으면 경고
+            if (revAmt && revCur==="USD" && !revRate) errors.push(`시트3 ${i+6}행: USD 매출인데 환율이 없습니다.`);
+            if (invAmt && invCur==="USD" && !invRate) errors.push(`시트3 ${i+6}행: USD 투자인데 환율이 없습니다.`);
+            const revKRW = revAmt ? (revCur==="USD" && revRate ? Math.round(revAmt * revRate) : revAmt) : null;
+            const invKRW = invAmt ? (invCur==="USD" && invRate ? Math.round(invAmt * invRate) : invAmt) : null;
+            return {
+              company_name: companyName,
+              year, revAmt, revCur, revRate, revKRW, invAmt, invCur, invRate, invKRW,
+              _row: i + 6,
+            };
+          });
+
+        setPreview({ companies, assignments, records, errors, existingNames });
+        setStep("preview");
+      } catch(err) {
+        toast("파일 파싱 오류: " + (err as Error).message, "error");
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleImport = async () => {
+    if (!preview) return;
+    setImporting(true);
+    try {
+      const {companies, assignments, records} = preview;
+      // 1) 기업 upsert (같은 company_name이면 update, 없으면 insert)
+      const companyIdMap: Record<string, string> = {};
+      for (const c of companies) {
+        const {company_name, ceo_name, business_type, contact, registration_no, notes} = c;
+        const payload = {company_name, ceo_name, business_type, contact, registration_no, notes};
+        const existing = tenants.find((t:any) => t.company_name === company_name);
+        if (existing) {
+          await sb.from("tenants").update(payload).eq("id", existing.id);
+          companyIdMap[company_name] = existing.id;
+        } else {
+          const {data, error} = await sb.from("tenants").insert(payload).select("id").single();
+          if (error) throw new Error(`기업 등록 실패(${company_name}): ${error.message}`);
+          companyIdMap[company_name] = data.id;
+        }
+      }
+
+      // 2) 입주현황 insert (이미 같은 tenant+room+start_date 조합 없는 경우만)
+      for (const a of assignments) {
+        const tenant_id = companyIdMap[a.company_name];
+        if (!tenant_id || !a.room_id || !a.start_date) continue;
+        // 중복 체크
+        const {data: exist} = await sb.from("tenant_rooms")
+          .select("id").eq("tenant_id", tenant_id).eq("room_id", a.room_id)
+          .eq("start_date", a.start_date).maybeSingle();
+        if (exist) continue; // 이미 있으면 skip
+        await sb.from("tenant_rooms").insert({
+          tenant_id, room_id: a.room_id, project_name: a.project_name,
+          start_date: a.start_date, expected_end: a.expected_end || null,
+        });
+      }
+
+      // 3) 연간실적 upsert
+      for (const r of records) {
+        const tenant_id = companyIdMap[r.company_name];
+        if (!tenant_id || !r.year) continue;
+        const payload = {
+          tenant_id, year: r.year,
+          revenue_amount: r.revAmt, revenue_currency: r.revCur||"KRW",
+          revenue_rate: r.revRate, revenue_krw: r.revKRW,
+          investment_amount: r.invAmt, investment_currency: r.invCur||"KRW",
+          investment_rate: r.invRate, investment_krw: r.invKRW,
+        };
+        const {data: exist} = await sb.from("tenant_records")
+          .select("id").eq("tenant_id", tenant_id).eq("year", r.year).maybeSingle();
+        if (exist) {
+          await sb.from("tenant_records").update(payload).eq("id", exist.id);
+        } else {
+          await sb.from("tenant_records").insert(payload);
+        }
+      }
+
+      await fetchAll();
+      toast(`✅ ${companies.length}개 기업 · ${assignments.length}건 입주 · ${records.length}건 실적 등록 완료`);
+      setStep("done");
+    } catch(e: any) {
+      toast(e.message || "가져오기 실패", "error");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (!open) return null;
+  return (
+    <Modal open={open} onClose={onClose} title="📥 엑셀 일괄 등록">
+      {step === "upload" && (
+        <div style={{display:"flex",flexDirection:"column",gap:16,alignItems:"center",padding:"20px 0"}}>
+          <div style={{fontSize:13,color:T.text54,textAlign:"center",lineHeight:1.7}}>
+            제공된 템플릿 엑셀 파일을 작성한 후 업로드하세요.<br/>
+            3개 시트(기업정보·입주현황·연간실적)가 모두 포함됩니다.
+          </div>
+          <a
+            href="/tenant-import-template.xlsx" download
+            style={{display:"inline-flex",alignItems:"center",gap:6,padding:"8px 18px",borderRadius:8,background:T.surfaceAlt,border:`1px solid ${T.border}`,color:T.sbGreen,fontWeight:700,fontSize:13,textDecoration:"none"}}
+          >
+            📄 템플릿 다운로드
+          </a>
+          <input ref={fileRef} type="file" accept=".xlsx,.xls" style={{display:"none"}}
+            onChange={e => { const f=e.target.files?.[0]; if(f) parseFile(f); e.target.value=""; }}
+          />
+          <Btn onClick={()=>fileRef.current?.click()} style={{minWidth:160,padding:"10px 24px",fontSize:14}}>
+            📂 엑셀 파일 선택
+          </Btn>
+        </div>
+      )}
+
+      {step === "preview" && preview && (
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          {/* 오류 표시 */}
+          {preview.errors.length > 0 && (
+            <div style={{background:"#FFF5F5",border:"1px solid #FC8181",borderRadius:8,padding:"10px 14px"}}>
+              <div style={{fontWeight:700,color:"#C53030",fontSize:13,marginBottom:6}}>⚠️ 오류 {preview.errors.length}건</div>
+              {preview.errors.map((e:string,i:number)=>(
+                <div key={i} style={{fontSize:12,color:"#C53030",marginBottom:2}}>• {e}</div>
+              ))}
+              <div style={{fontSize:11,color:"#718096",marginTop:6}}>오류가 있어도 오류 없는 항목은 가져올 수 있습니다.</div>
+            </div>
+          )}
+          {/* 파싱 결과 요약 */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+            {[
+              ["기업정보", preview.companies.length, T.sbGreen],
+              ["입주현황", preview.assignments.length, T.greenAccent],
+              ["연간실적", preview.records.length, "#8b5cf6"],
+            ].map(([l,v,c]:[string,number,string])=>(
+              <div key={l} style={{textAlign:"center",padding:"10px",background:T.surfaceAlt,borderRadius:8,border:`1px solid ${T.border}`}}>
+                <div style={{fontSize:11,color:T.text38}}>{l}</div>
+                <div style={{fontWeight:900,fontSize:20,color:c}}>{v}</div>
+                <div style={{fontSize:10,color:T.text38}}>건</div>
+              </div>
+            ))}
+          </div>
+          {/* 기업 목록 미리보기 */}
+          <div style={{maxHeight:220,overflowY:"auto",border:`1px solid ${T.border}`,borderRadius:8}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr style={{background:T.surfaceAlt}}>
+                  {["기업명","대표자","업종","상태"].map(h=>(
+                    <th key={h} style={{padding:"7px 10px",textAlign:"left",fontWeight:700,color:T.text54,borderBottom:`1px solid ${T.border}`}}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {preview.companies.map((c:any,i:number)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
+                    <td style={{padding:"6px 10px",fontWeight:600,color:T.text87}}>{c.company_name}</td>
+                    <td style={{padding:"6px 10px",color:T.text54}}>{c.ceo_name||"—"}</td>
+                    <td style={{padding:"6px 10px",color:T.text54}}>{c.business_type||"—"}</td>
+                    <td style={{padding:"6px 10px"}}>
+                      <Badge text={preview.existingNames.has(c.company_name)?"업데이트":"신규"} color={preview.existingNames.has(c.company_name)?T.warn:T.success}/>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
+            <Btn variant="outline" onClick={()=>setStep("upload")}>다시 선택</Btn>
+            <Btn onClick={handleImport} disabled={importing}>
+              {importing ? "가져오는 중…" : `✅ ${preview.companies.length}개 기업 가져오기`}
+            </Btn>
+          </div>
+        </div>
+      )}
+
+      {step === "done" && (
+        <div style={{textAlign:"center",padding:"30px 0",display:"flex",flexDirection:"column",gap:16,alignItems:"center"}}>
+          <div style={{fontSize:48}}>🎉</div>
+          <div style={{fontWeight:800,fontSize:16,color:T.text87}}>가져오기 완료!</div>
+          <div style={{fontSize:13,color:T.text54}}>기업 목록에서 결과를 확인하세요.</div>
+          <Btn onClick={onClose}>닫기</Btn>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function TenantTab({profile, toast, isMobile}) {
   const admin = isAdmin(profile);
   const [subTab, setSubTab]     = useState(0);
@@ -2556,6 +2834,7 @@ function TenantTab({profile, toast, isMobile}) {
   const [assignModal, setAssignModal] = useState(false);
   const [exitModal,   setExitModal]   = useState(false);
   const [recordModal, setRecordModal] = useState(false);
+  const [importModal, setImportModal] = useState(false);
 
   // 편집 컨텍스트
   const [editSpace,  setEditSpace]  = useState(null);
@@ -2648,6 +2927,7 @@ function TenantTab({profile, toast, isMobile}) {
     assignModal, setAssignModal,
     exitModal,   setExitModal,
     recordModal, setRecordModal,
+    importModal, setImportModal,
     editSpace,  setEditSpace,
     editRoom,   setEditRoom,
     editTenant, setEditTenant,
@@ -2689,6 +2969,10 @@ function TenantTab({profile, toast, isMobile}) {
       <TAssignForm ctx={ctx}/>
       <TExitForm   ctx={ctx}/>
       <TRecordForm ctx={ctx}/>
+      <TenantImportModal
+        open={importModal} onClose={()=>setImportModal(false)}
+        rooms={rooms} tenants={tenants} toast={toast} fetchAll={fetchAll}
+      />
     </div>
   );
 }

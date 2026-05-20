@@ -924,6 +924,8 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [collapsedDepts, setCollapsedDepts] = useState<Set<string>>(new Set());
+  const toggleDept = useCallback((id:string) => setCollapsedDepts(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; }), []);
   const set = useCallback((k,v) => setForm(f=>({...f,[k]:v})), []);
 
   const importCSV = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1069,41 +1071,78 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
 
         {filtered.length === 0
           ? <div style={{color:T.text38,textAlign:"center",padding:60,letterSpacing:"-0.01em"}}>등록된 KPI가 없습니다</div>
-          : filtered.map(kpi => {
-              const st = getSt(kpi), rt = getRate(kpi), cum = getCum(kpi);
-              const canEdit = canEditDept(profile, kpi.dept_id);
-              return (
-                <Card key={kpi.id} style={{padding:16,marginBottom:10}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",gap:6,alignItems:"center",marginBottom:5,flexWrap:"wrap"}}>
-                        <span style={{
-                          color: T.sbGreen, fontSize:11, fontWeight:700,
-                          background: T.lightGreen,
-                          borderRadius:20, padding:"2px 8px", whiteSpace:"nowrap",
-                          letterSpacing:"-0.01em",
-                        }}>{dn(kpi.dept_id)}</span>
-                        <span style={{color:T.text38,fontSize:11,letterSpacing:"-0.01em"}}>{kpi.project} · {kpi.cycle}</span>
+          : (() => {
+              // 부서별 그룹핑
+              const groups = depts.map(d=>({
+                dept:d,
+                items:filtered.filter(k=>k.dept_id===d.id),
+              })).filter(g=>g.items.length>0);
+              return groups.map(({dept:d, items})=>{
+                const collapsed = collapsedDepts.has(d.id);
+                const 달성 = items.filter(k=>getSt(k)==="달성").length;
+                const 미달 = items.filter(k=>getSt(k)==="미달").length;
+                const 미입력 = items.filter(k=>getSt(k)==="미입력").length;
+                const rates = items.map(k=>getRate(k)).filter(r=>r!==null) as number[];
+                const avg = rates.length>0 ? Math.round(rates.reduce((a,b)=>a+b,0)/rates.length) : null;
+                return (
+                  <div key={d.id} style={{marginBottom:12}}>
+                    {/* 부서 헤더 */}
+                    <div
+                      onClick={()=>toggleDept(d.id)}
+                      style={{
+                        display:"flex",alignItems:"center",gap:10,
+                        padding:"10px 14px",
+                        background:T.lightGreen,
+                        borderRadius:collapsed?10:"10px 10px 0 0",
+                        border:`1px solid ${T.greenAccent}33`,
+                        cursor:"pointer",
+                        userSelect:"none" as any,
+                      }}>
+                      <span style={{color:T.sbGreen,fontWeight:800,fontSize:13,flex:1,letterSpacing:"-0.01em"}}>{d.name}</span>
+                      <span style={{color:T.text38,fontSize:11}}>{items.length}개</span>
+                      <div style={{display:"flex",gap:5}}>
+                        {달성>0 && <span style={{background:T.success+"22",color:T.success,borderRadius:10,padding:"2px 7px",fontSize:11,fontWeight:700}}>달성 {달성}</span>}
+                        {미달>0 && <span style={{background:T.error+"22",color:T.error,borderRadius:10,padding:"2px 7px",fontSize:11,fontWeight:700}}>미달 {미달}</span>}
+                        {미입력>0 && <span style={{background:T.muted+"22",color:T.muted,borderRadius:10,padding:"2px 7px",fontSize:11,fontWeight:700}}>미입력 {미입력}</span>}
+                        {avg!==null && <span style={{background:T.greenAccent+"22",color:T.greenAccent,borderRadius:10,padding:"2px 7px",fontSize:11,fontWeight:700}}>{avg}%</span>}
                       </div>
-                      <div style={{color:T.text87,fontWeight:700,fontSize:14,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-0.01em"}}>{kpi.name}</div>
-                      <div style={{color:T.text54,fontSize:12,letterSpacing:"-0.01em"}}>
-                        목표 <span style={{color:T.text87}}>{kpi.target}{kpi.unit}</span>
-                        {cum !== null && <> · <span style={{color:T.greenAccent,fontWeight:700}}>{cum}{kpi.unit}</span></>}
-                        {" · "}<span style={{color:T.text38}}>{kpi.manager}</span>
-                      </div>
+                      <span style={{color:T.greenAccent,fontSize:14,fontWeight:700,transform:collapsed?"rotate(0deg)":"rotate(90deg)",transition:"transform 0.2s",display:"inline-block"}}>▶</span>
                     </div>
-                    <Gauge rate={rt} status={st} size={isMobile?48:54}/>
+                    {/* KPI 카드들 */}
+                    {!collapsed && items.map(kpi => {
+                      const st = getSt(kpi), rt = getRate(kpi), cum = getCum(kpi);
+                      const canEdit = canEditDept(profile, kpi.dept_id);
+                      return (
+                        <Card key={kpi.id} style={{padding:16,marginBottom:0,borderRadius:0,borderTop:"none",borderLeft:`1px solid ${T.greenAccent}22`,borderRight:`1px solid ${T.greenAccent}22`}}>
+                          <div style={{display:"flex",alignItems:"center",gap:12}}>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{color:T.text38,fontSize:11,marginBottom:3,letterSpacing:"-0.01em"}}>{kpi.project} · {kpi.cycle}</div>
+                              <div style={{color:T.text87,fontWeight:700,fontSize:14,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",letterSpacing:"-0.01em"}}>{kpi.name}</div>
+                              <div style={{color:T.text54,fontSize:12,letterSpacing:"-0.01em"}}>
+                                목표 <span style={{color:T.text87}}>{kpi.target}{kpi.unit}</span>
+                                {cum !== null && <> · <span style={{color:T.greenAccent,fontWeight:700}}>{cum}{kpi.unit}</span></>}
+                                {" · "}<span style={{color:T.text38}}>{kpi.manager}</span>
+                              </div>
+                            </div>
+                            <Gauge rate={rt} status={st} size={isMobile?48:54}/>
+                          </div>
+                          <div style={{display:"flex",gap:6,marginTop:12,justifyContent:"flex-end",alignItems:"center"}}>
+                            <Badge text={st} color={SC[st]}/>
+                            {canEdit && <>
+                              <Btn onClick={()=>startEdit(kpi)} variant="outline" color={T.greenAccent} style={{padding:"5px 12px",fontSize:12}}>수정</Btn>
+                              <Btn onClick={()=>del(kpi.id)} variant="outline" color={T.error} style={{padding:"5px 12px",fontSize:12}}>삭제</Btn>
+                            </>}
+                          </div>
+                        </Card>
+                      );
+                    })}
+                    {/* 마지막 카드 하단 border-radius */}
+                    {!collapsed && <div style={{height:8,background:T.surface,borderRadius:"0 0 10px 10px",border:`1px solid ${T.greenAccent}22`,borderTop:"none"}}/>}
                   </div>
-                  <div style={{display:"flex",gap:6,marginTop:12,justifyContent:"flex-end",alignItems:"center"}}>
-                    <Badge text={st} color={SC[st]}/>
-                    {canEdit && <>
-                      <Btn onClick={()=>startEdit(kpi)} variant="outline" color={T.greenAccent} style={{padding:"5px 12px",fontSize:12}}>수정</Btn>
-                      <Btn onClick={()=>del(kpi.id)} variant="outline" color={T.error} style={{padding:"5px 12px",fontSize:12}}>삭제</Btn>
-                    </>}
-                  </div>
-                </Card>
-              );
-            })}
+                );
+              });
+            })()
+        }
       </div>
     </div>
   );
@@ -1372,8 +1411,55 @@ function DashTab({depts, kpis, year, isMobile}) {
     return {t, 달, rate: t>0?Math.round(달/t*100):0};
   },[prevKpis]);
 
+  // 7대 경영목표 집계
+  const goalStats = useMemo(()=>{
+    const sumAct = (filter:(k:any)=>boolean) =>
+      yk.filter(filter).reduce((s,k)=>{ const c=getCum(k); return s+(c??0); },0);
+    const sumTgt = (filter:(k:any)=>boolean) =>
+      yk.filter(filter).reduce((s,k)=>s+k.target,0);
+    const NAMES_양성 = ["교육생 수","전문인력 양성","게임 개발 실무교육","웹툰 부스트캠프","스토리 IP 특화 교육","인력 양성"];
+    const NAMES_제작 = ["창·제작 건수","창 제작 지원","백제 관련 디지털 콘텐츠 제작","충남·당진 인센티브 제작지원","게임 제작지원 건수","메타버스 융합콘텐츠 제작지원","대학생 단편영화 제작지원"];
+    const NAMES_사업화 = ["사업화 건수","사업화 지원","ICT 사업화 지원","인디게임파크 신규창업"];
+    const NAMES_일자리 = ["신규 일자리 창출","일자리 창출","고용 창출"];
+    const NAMES_글로벌 = ["글로벌 수출 협약","기업 지원"];
+    return [
+      {no:"①",name:"전문인력 양성",unit:"명",  color:"#6366F1", actual:sumAct(k=>NAMES_양성.includes(k.name)),  target:sumTgt(k=>NAMES_양성.includes(k.name))},
+      {no:"②",name:"콘텐츠 창·제작",unit:"건", color:"#8B5CF6", actual:sumAct(k=>NAMES_제작.includes(k.name)),  target:sumTgt(k=>NAMES_제작.includes(k.name))},
+      {no:"③",name:"매출액",unit:"백만원",      color:"#0EA5E9", actual:sumAct(k=>k.name==="매출액"),           target:sumTgt(k=>k.name==="매출액")},
+      {no:"④",name:"투자유치",unit:"백만원",    color:"#10B981", actual:sumAct(k=>k.name==="투자유치"),         target:sumTgt(k=>k.name==="투자유치")},
+      {no:"⑤",name:"일자리 창출",unit:"명",    color:"#F59E0B", actual:sumAct(k=>NAMES_일자리.includes(k.name)),target:sumTgt(k=>NAMES_일자리.includes(k.name))},
+      {no:"⑥",name:"사업화 건수",unit:"건",    color:"#EF4444", actual:sumAct(k=>NAMES_사업화.includes(k.name)),target:sumTgt(k=>NAMES_사업화.includes(k.name))},
+      {no:"⑦",name:"글로벌 성과",unit:"만달러",color:"#64748B", actual:sumAct(k=>NAMES_글로벌.includes(k.name)&&k.project.includes("글로벌")), target:sumTgt(k=>NAMES_글로벌.includes(k.name)&&k.project.includes("글로벌"))},
+    ];
+  },[yk]);
+
   return (
     <div>
+      {/* 7대 경영목표 집계 */}
+      <div style={{marginBottom:20}}>
+        <STitle>7대 경영목표 달성 현황</STitle>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8}}>
+          {goalStats.map(g=>{
+            const rate = g.target>0 ? Math.round(g.actual/g.target*100) : null;
+            const fmt = (v:number,u:string)=>{
+              if(u==="백만원"){ if(v>=100000) return `${(v/100000).toFixed(1)}억`; if(v>=10000) return `${(v/10000).toFixed(0)}천만`; return `${v.toLocaleString()}만`; }
+              return `${v.toLocaleString()}${u}`;
+            };
+            return (
+              <Card key={g.no} style={{padding:"12px 14px",borderLeft:`4px solid ${g.color}`}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+                  <span style={{background:g.color,color:"#fff",borderRadius:4,padding:"1px 7px",fontSize:11,fontWeight:700}}>{g.no}</span>
+                  <span style={{color:T.text54,fontSize:11,letterSpacing:"-0.01em"}}>{g.name}</span>
+                </div>
+                <div style={{fontWeight:900,fontSize:18,color:g.color,letterSpacing:"-0.02em"}}>{fmt(g.actual,g.unit)}</div>
+                <div style={{color:T.text38,fontSize:11,marginTop:2}}>
+                  목표 {fmt(g.target,g.unit)} {rate!==null && <span style={{color:rate>=100?T.success:rate>=70?T.warn:T.error,fontWeight:700}}>({rate}%)</span>}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      </div>
       {/* 전체 달성률 카드 */}
       <Card style={{padding:"20px 18px",marginBottom:18}}>
         <div style={{display:"flex",alignItems:"center",gap:18}}>
@@ -1506,6 +1592,88 @@ function ExportTab({depts, kpis, year, isMobile}) {
   const 미달 = yk.filter(k=>getSt(k)==="미달").length;
   const 미입 = yk.filter(k=>getSt(k)==="미입력").length;
 
+  const exportAnnualReport = () => {
+    const yk2 = kpis.filter(k=>k.year===year);
+    const 달 = yk2.filter(k=>getSt(k)==="달성").length;
+    const 진 = yk2.filter(k=>getSt(k)==="진행중").length;
+    const 미달2 = yk2.filter(k=>getSt(k)==="미달").length;
+    const 미입2 = yk2.filter(k=>getSt(k)==="미입력").length;
+    const overall = yk2.length>0?Math.round(달/yk2.length*100):0;
+    const stColor = (s:string)=>s==="달성"?"#22c55e":s==="진행중"?"#f59e0b":s==="미달"?"#ef4444":"#94a3b8";
+    const rows = depts.map(d=>{
+      const dk = yk2.filter(k=>k.dept_id===d.id);
+      if(!dk.length) return "";
+      const dRate = dk.map(k=>getRate(k)).filter(r=>r!==null);
+      const dAvg = dRate.length ? Math.round(dRate.reduce((a:number,b:number)=>a+b,0)/dRate.length) : null;
+      const dRows = dk.map(k=>{
+        const cum=getCum(k), rate=getRate(k), st=getSt(k);
+        const sc = stColor(st);
+        return `<tr>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#64748b">${k.project}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:13px;font-weight:600;color:#1e293b">${k.name}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:right">${k.target}${k.unit}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:right;font-weight:700;color:#4338CA">${cum!=null?`${cum}${k.unit}`:"—"}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;text-align:right;font-weight:700;color:${sc}">${rate!=null?`${rate}%`:"—"}</td>
+          <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;text-align:center"><span style="background:${sc}22;color:${sc};border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">${st}</span></td>
+        </tr>`;
+      }).join("");
+      return `
+        <div style="margin-bottom:24px;page-break-inside:avoid">
+          <div style="display:flex;align-items:center;gap:10;background:#eef2ff;padding:10px 16px;border-radius:8px 8px 0 0;border-left:4px solid #4338CA">
+            <span style="font-weight:800;font-size:14px;color:#1e1b4b;flex:1">${d.name}</span>
+            <span style="font-size:12px;color:#64748b">${dk.length}개 KPI</span>
+            ${dAvg!=null?`<span style="background:#4338CA;color:#fff;border-radius:10px;padding:2px 10px;font-size:12px;font-weight:700">${dAvg}%</span>`:""}
+          </div>
+          <table style="width:100%;border-collapse:collapse;border:1px solid #e2e8f0;border-top:none">
+            <thead><tr style="background:#f8fafc">
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">사업명</th>
+              <th style="padding:8px 12px;text-align:left;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">KPI 지표</th>
+              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">목표</th>
+              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">실적</th>
+              <th style="padding:8px 12px;text-align:right;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">달성률</th>
+              <th style="padding:8px 12px;text-align:center;font-size:11px;color:#64748b;font-weight:600;border-bottom:1px solid #e2e8f0">상태</th>
+            </tr></thead>
+            <tbody>${dRows}</tbody>
+          </table>
+        </div>`;
+    }).join("");
+    const html = `<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8">
+      <title>${year}년 KPI 연간 성과보고서 — ${ORG_NAME}</title>
+      <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'Apple SD Gothic Neo','Noto Sans KR',sans-serif;background:#f8fafc;color:#1e293b;padding:32px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+        .page{max-width:900px;margin:0 auto;background:#fff;padding:40px 48px;border-radius:16px;box-shadow:0 0 40px rgba(0,0,0,0.08)}
+        .print-btn{position:fixed;top:16px;right:16px;background:#4338CA;color:#fff;border:none;border-radius:50px;padding:10px 20px;font-family:inherit;font-size:13px;font-weight:700;cursor:pointer}
+        @media print{.print-btn{display:none}body{padding:0;background:#fff}.page{box-shadow:none;border-radius:0}}
+      </style></head><body>
+      <button class="print-btn" onclick="window.print()">🖨 PDF 저장</button>
+      <div class="page">
+        <div style="border-bottom:3px solid #4338CA;padding-bottom:20px;margin-bottom:28px">
+          <div style="background:#4338CA;color:#fff;display:inline-block;border-radius:20px;padding:3px 12px;font-size:11px;font-weight:700;margin-bottom:10px">${ORG_NAME} · ${ORG_DEPT}</div>
+          <div style="font-size:24px;font-weight:900;color:#1e1b4b;letter-spacing:-0.03em">${year}년 KPI 연간 성과보고서</div>
+          <div style="color:#64748b;font-size:13px;margin-top:6px">기준일: ${new Date().toLocaleDateString("ko-KR")} · 총 ${yk2.length}개 KPI</div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:28px">
+          ${[["달성",달,"#22c55e"],["진행중",진,"#f59e0b"],["미달",미달2,"#ef4444"],["미입력",미입2,"#94a3b8"]].map(([l,v,c])=>`
+            <div style="border-radius:10px;padding:14px;border:1px solid ${c}33;border-left:4px solid ${c};text-align:center">
+              <div style="font-size:22px;font-weight:900;color:${c}">${v}</div>
+              <div style="font-size:12px;color:#64748b;margin-top:2px">${l}</div>
+            </div>`).join("")}
+        </div>
+        <div style="background:#eef2ff;border-radius:10px;padding:12px 16px;margin-bottom:28px;display:flex;align-items:center;gap:12">
+          <span style="font-size:28px;font-weight:900;color:#4338CA">${overall}%</span>
+          <span style="color:#3730a3;font-size:13px;font-weight:600">전체 KPI 달성률 (달성 ${달} / 전체 ${yk2.length})</span>
+        </div>
+        ${rows}
+        <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;font-size:11px;color:#94a3b8">
+          <span style="font-weight:800;color:#4338CA">${ORG_NAME}</span>
+          <span>${ORG_DEPT} · ${year}년 · ${APP_URL}</span>
+        </div>
+      </div></body></html>`;
+    const w = window.open("","_blank");
+    if(w){ w.document.write(html); w.document.close(); }
+  };
+
   const handleCopy = () => {
     copyReportText(kpis, depts, year);
     setCopied(true);
@@ -1581,6 +1749,7 @@ function ExportTab({depts, kpis, year, isMobile}) {
         <ExCard icon="📊" title="KPI 현황 CSV" desc="부서별 KPI 요약표 · 엑셀에서 바로 열기" onClick={()=>exportCSV(kpis,depts,year)} color={T.success} tag="엑셀"/>
         <ExCard icon="📋" title="실적 상세 CSV" desc="기간별 실적 이력 전체 · 증빙·비고 포함" onClick={()=>exportDetailCSV(kpis,depts,year)} color="#0ea5e9" tag="엑셀"/>
         <ExCard icon="📝" title="보고문 복사" desc="이사회·도청 보고용 텍스트 · 한 번에 복사" onClick={handleCopy} color={copied?T.success:T.warn} tag={copied?"✓ 복사됨":"클립보드"}/>
+        <ExCard icon="📋" title="연간 요약 보고서" desc="부서별 KPI 전체를 표 형태로 정리 · 인쇄·PDF 저장 가능" onClick={exportAnnualReport} color="#8B5CF6" tag="인쇄"/>
       </div>
 
       {/* 카카오톡 독촉 문구 */}

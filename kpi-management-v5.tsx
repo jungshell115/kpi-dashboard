@@ -60,6 +60,63 @@ const MONTHS = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","
 const CY = new Date().getFullYear();
 const SC = { 달성: T.success, 진행중: T.warn, 미달: T.error, 미입력: T.muted };
 
+// ── 7대 경영목표 분류 가이드 데이터 ─────────────────────────────────
+const GOAL_GUIDE = [
+  {
+    no:"①", name:"전문인력 양성", color:"#6366F1",
+    desc:"직무·기술 특화 교육 이수 인원",
+    check:["수료 후 취업·창업·사업화로 이어지는 교육인가?","특정 직무·기술에 특화된 커리큘럼인가?","수료증 또는 이수 확인이 가능한가?"],
+    include:"게임 개발, 웹툰 창작, AI 콘텐츠, 메타버스 개발 등 직무과정",
+    exclude:"일반 시민 체험·관람형 행사, 1~2일 단기 교양교육, 수료 확인 불가",
+  },
+  {
+    no:"②", name:"콘텐츠 창·제작", color:"#8B5CF6",
+    desc:"콘텐츠 결과물이 실제로 만들어진 건수",
+    include:"영상, 음악, 게임, 웹툰, 메타버스 콘텐츠 등 결과물 제작 건수",
+    exclude:"기획·회의·행사 횟수, 교육 건수 (시장 출시 여부와 무관)",
+  },
+  {
+    no:"③", name:"매출액", color:"#0EA5E9",
+    desc:"입주·지원기업의 외부 판매 매출 합산",
+    include:"기업이 외부에 판매하여 발생한 매출 (센터별 집계)",
+    exclude:"기관 자체 예산, 정부 보조금, 지원금, 대출",
+  },
+  {
+    no:"④", name:"투자유치", color:"#10B981",
+    desc:"외부 투자자로부터 실제 유치한 투자금",
+    include:"VC·엔젤·민간 투자자로부터 기업이 받은 투자금",
+    exclude:"정부 보조금, 지자체 지원금, 대출",
+  },
+  {
+    no:"⑤", name:"일자리 창출", color:"#F59E0B",
+    desc:"지원 결과로 발생한 신규 채용 인원",
+    include:"기간제·정규직 신규 채용 인원 (모두 포함)",
+    exclude:"인턴십, 봉사활동, 단기 프리랜서 용역",
+  },
+  {
+    no:"⑥", name:"사업화 건수", color:"#EF4444",
+    desc:"지원 후 실제 시장 출시·창업까지 이어진 건수",
+    include:"제품/서비스 출시, 창업 법인 설립, 납품·판매 계약, IP 등록 완료",
+    exclude:"시제품만 제작, 사업계획서만 제출, 수료 후 미결과",
+  },
+  {
+    no:"⑦", name:"글로벌 성과", color:"#64748B",
+    desc:"해외와 연결된 수출·진출·협력 실적",
+    include:"해외 수출 계약, 해외 박람회 참가, 해외 기관 MOU 체결",
+    exclude:"국내 행사에 외국인 참가, 해외 출장·벤치마킹, 다국어 홍보물 제작",
+  },
+];
+
+const DECISION_STEPS = [
+  { q:"결과물이 해외(수출·협력·진출)와 연결되는가?",  yes:"⑦ 글로벌 성과" },
+  { q:"금액으로 측정되는가? (매출 또는 투자유치)",    yes:"③ 매출액 또는 ④ 투자유치" },
+  { q:"채용(취업)이 발생했는가?",                    yes:"⑤ 일자리 창출" },
+  { q:"콘텐츠·IP·창업이 시장에 나왔는가?",           yes:"⑥ 사업화 건수" },
+  { q:"콘텐츠 결과물이 제작되었는가?",               yes:"② 콘텐츠 창·제작" },
+  { q:"직무 특화 교육을 이수했는가?",                yes:"① 전문인력 양성" },
+  { q:"위 모두 해당 없음",                           yes:"경영목표 집계 제외 (부서 자체 KPI)" },
+];
+
 // ── 유틸 ────────────────────────────────────────────────────────────
 const getPeriods = c => c==="월별"?MONTHS:c==="분기별"?QUARTERS:c==="반기별"?HALF:["연간"];
 
@@ -731,15 +788,113 @@ function DeptTab({depts, refetch, profile, toast}) {
   );
 }
 
+// ── 7대 경영목표 가이드 모달 ─────────────────────────────────────────
+function GoalGuideModal({open, onClose}) {
+  if (!open) return null;
+  return (
+    <div
+      style={{position:"fixed",inset:0,zIndex:2000,display:"flex",alignItems:"flex-end",background:"rgba(0,0,0,0.5)"}}
+      onClick={onClose}>
+      <div
+        style={{background:T.surface,borderRadius:"20px 20px 0 0",width:"100%",maxHeight:"92vh",overflowY:"auto",padding:"20px 18px 44px",boxShadow:"0 -8px 32px rgba(0,0,0,0.18)"}}
+        onClick={e=>e.stopPropagation()}>
+
+        {/* 헤더 */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+          <span style={{color:T.sbGreen,fontWeight:800,fontSize:15,letterSpacing:"-0.01em"}}>📋 7대 경영목표 분류 가이드</span>
+          <button onClick={onClose} style={{background:"none",border:"none",color:T.text38,fontSize:24,cursor:"pointer",lineHeight:1}}>×</button>
+        </div>
+
+        {/* 판단 순서 */}
+        <div style={{background:T.lightGreen,borderRadius:12,padding:"14px 16px",marginBottom:16}}>
+          <div style={{color:T.sbGreen,fontWeight:700,fontSize:13,marginBottom:10}}>⚡ 판단 순서 — 위에서부터 차례로 확인하세요</div>
+          {DECISION_STEPS.map((s,i)=>(
+            <div key={i} style={{display:"flex",gap:10,marginBottom:i<6?8:0,alignItems:"flex-start"}}>
+              <div style={{minWidth:22,height:22,borderRadius:"50%",background:i<6?T.greenAccent:"#94a3b8",color:"#fff",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,marginTop:1}}>{i+1}</div>
+              <div style={{flex:1,fontSize:13}}>
+                <span style={{color:T.text87}}>{s.q}</span>
+                <span style={{color:i<6?T.greenAccent:"#94a3b8",fontWeight:700,marginLeft:6}}>→ {s.yes}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* 목표별 상세 기준 */}
+        <div style={{color:T.text54,fontWeight:700,fontSize:12,marginBottom:8,letterSpacing:"-0.01em"}}>목표별 포함·제외 상세 기준</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {GOAL_GUIDE.map((g,i)=>(
+            <div key={i} style={{borderRadius:12,padding:"12px 14px",border:`1px solid ${g.color}33`,borderLeft:`4px solid ${g.color}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:7,flexWrap:"wrap"}}>
+                <span style={{background:g.color,color:"#fff",borderRadius:6,padding:"2px 9px",fontSize:12,fontWeight:700,whiteSpace:"nowrap"}}>{g.no} {g.name}</span>
+                <span style={{color:T.text54,fontSize:12}}>{g.desc}</span>
+              </div>
+              {g.check && (
+                <div style={{background:"#f0fdf4",borderRadius:8,padding:"8px 10px",marginBottom:7,border:"1px solid #bbf7d0"}}>
+                  <div style={{color:"#15803d",fontSize:11,fontWeight:700,marginBottom:5}}>✅ 3가지 모두 해당해야 포함</div>
+                  {g.check.map((c,j)=>(
+                    <div key={j} style={{color:"#166534",fontSize:12,marginBottom:j<g.check.length-1?3:0,display:"flex",gap:6}}>
+                      <span style={{fontWeight:700,minWidth:16}}>{j+1}.</span><span>{c}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{fontSize:12,marginBottom:4,display:"flex",gap:6,alignItems:"flex-start"}}>
+                <span style={{color:"#16a34a",fontWeight:700,minWidth:40,flexShrink:0}}>포함 ✓</span>
+                <span style={{color:T.text87}}>{g.include}</span>
+              </div>
+              <div style={{fontSize:12,display:"flex",gap:6,alignItems:"flex-start"}}>
+                <span style={{color:T.error,fontWeight:700,minWidth:40,flexShrink:0}}>제외 ✗</span>
+                <span style={{color:T.text54}}>{g.exclude}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{marginTop:14,padding:"10px 14px",background:"#fffbeb",borderRadius:10,border:"1px solid #fde68a",color:"#92400e",fontSize:12,lineHeight:1.6}}>
+          💡 <strong>하나의 KPI가 여러 목표에 해당할 경우</strong><br/>
+          판단 순서(1→7)에 따라 <strong>가장 먼저 해당하는 목표 1개만</strong> 선택하세요.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── KPI 등록 폼 (RegisterTab 외부 — 함수 내부 정의 시 매 렌더 unmount 버그 방지) ──
 function RegisterFormContent({form, set, allowedDepts, saving, submit, editId, onCancel}) {
+  const [showGuide, setShowGuide] = useState(false);
   return (
     <>
+      <GoalGuideModal open={showGuide} onClose={()=>setShowGuide(false)}/>
+
+      {/* 가이드 버튼 */}
+      <div
+        onClick={()=>setShowGuide(true)}
+        style={{
+          display:"flex",alignItems:"center",gap:7,
+          background:T.lightGreen,border:`1px solid ${T.greenAccent}33`,
+          borderRadius:10,padding:"9px 14px",marginBottom:16,cursor:"pointer",
+        }}>
+        <span style={{fontSize:15}}>📋</span>
+        <div style={{flex:1}}>
+          <div style={{color:T.sbGreen,fontWeight:700,fontSize:12,letterSpacing:"-0.01em"}}>7대 경영목표 분류 가이드</div>
+          <div style={{color:T.text54,fontSize:11,marginTop:1}}>이 KPI가 어떤 경영목표에 해당하는지 확인하세요</div>
+        </div>
+        <span style={{color:T.greenAccent,fontSize:13,fontWeight:700}}>보기 →</span>
+      </div>
+
       <FF label="부서">
         <Sel value={form.dept_id} onChange={v=>set("dept_id",v)} options={allowedDepts.map(d=>({value:d.id,label:d.name}))}/>
       </FF>
       <FF label="사업명"><Inp value={form.project} onChange={v=>set("project",v)} placeholder="예) 지역문화진흥사업"/></FF>
-      <FF label="KPI 지표명"><Inp value={form.name} onChange={v=>set("name",v)} placeholder="예) 행사 참여자 수"/></FF>
+      <FF label={
+        <span style={{display:"flex",alignItems:"center",gap:5}}>
+          KPI 지표명
+          <button
+            type="button"
+            onClick={()=>setShowGuide(true)}
+            style={{background:T.greenAccent,color:"#fff",border:"none",borderRadius:"50%",width:16,height:16,fontSize:10,fontWeight:700,cursor:"pointer",display:"inline-flex",alignItems:"center",justifyContent:"center",flexShrink:0,lineHeight:1}}>?</button>
+        </span>
+      }><Inp value={form.name} onChange={v=>set("name",v)} placeholder="예) 행사 참여자 수"/></FF>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
         <FF label="목표값"><Inp type="number" value={form.target} onChange={v=>set("target",v)} placeholder="숫자"/></FF>
         <FF label="단위"><Sel value={form.unit} onChange={v=>set("unit",v)} options={UNITS.map(u=>({value:u,label:u}))}/></FF>

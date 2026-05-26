@@ -2816,6 +2816,349 @@ function TenantImportModal({open, onClose, rooms, tenants, toast, fetchAll}: any
   );
 }
 
+// ══════════════════════════════════════════════════════════════
+// MOU 탭
+// ══════════════════════════════════════════════════════════════
+const MOU_ORG_TYPES  = ["대학","기업","공공기관","지자체","연구소","해외기관","기타"];
+const MOU_DOM_CATS   = ["지자체","대학","기업","공공기관","연구소","협회·단체","기타"];
+const MOU_INTL_REGS  = ["아시아","미주","유럽","오세아니아","중동·아프리카","기타"];
+const MOU_FIELDS     = ["교육·인력","콘텐츠·미디어","창업·스타트업","기술협력","문화·예술","관광·지역","기타"];
+const MOU_STATUSES   = ["유효","만료임박","갱신중","만료","검토중"];
+const SC_MOU: Record<string,string> = {유효:"#22c55e",만료임박:"#f59e0b",갱신중:"#6366F1",만료:"#94a3b8",검토중:"#0ea5e9"};
+
+function getDdayMou(d: string|null): number|null {
+  if (!d) return null;
+  return Math.ceil((new Date(d) as any - Date.now()) / 864e5);
+}
+
+function MouFormModal({open, onClose, editMou, toast, fetchAll}: any) {
+  const blank = {
+    name:"", org_type:"", scope:"국내", domestic_category:"", international_region:"",
+    country:"", field:"", purpose:"", signed_date:"", expiry_date:"",
+    is_auto_renew:false, status:"유효", notes:"",
+  };
+  const [f, setF] = useState<any>(blank);
+  const [saving, setSaving] = useState(false);
+  const set = (k: string, v: any) => setF((p: any) => ({...p, [k]: v}));
+
+  useEffect(() => {
+    if (!open) return;
+    setF(editMou ? {
+      name: editMou.name||"", org_type: editMou.org_type||"",
+      scope: editMou.scope||"국내", domestic_category: editMou.domestic_category||"",
+      international_region: editMou.international_region||"", country: editMou.country||"",
+      field: editMou.field||"", purpose: editMou.purpose||"",
+      signed_date: editMou.signed_date||"", expiry_date: editMou.expiry_date||"",
+      is_auto_renew: editMou.is_auto_renew||false, status: editMou.status||"유효",
+      notes: editMou.notes||"",
+    } : blank);
+  }, [open, editMou]);
+
+  const save = async () => {
+    if (!f.name.trim()) { toast("기관명을 입력해주세요","error"); return; }
+    setSaving(true);
+    const payload = {
+      name: f.name.trim(), org_type: f.org_type||null, scope: f.scope,
+      domestic_category: f.scope==="국내" ? (f.domestic_category||null) : null,
+      international_region: f.scope==="국제" ? (f.international_region||null) : null,
+      country: f.scope==="국제" ? (f.country||null) : null,
+      field: f.field||null, purpose: f.purpose||null,
+      signed_date: f.signed_date||null, expiry_date: f.expiry_date||null,
+      is_auto_renew: f.is_auto_renew, status: f.status, notes: f.notes||null,
+    };
+    const {error} = editMou
+      ? await sb.from("mou_partners").update(payload).eq("id", editMou.id)
+      : await sb.from("mou_partners").insert(payload);
+    setSaving(false);
+    if (error) { toast(error.message,"error"); return; }
+    toast(editMou ? "수정됐습니다 ✓" : "등록됐습니다 🎉");
+    await fetchAll(); onClose();
+  };
+
+  if (!open) return null;
+  return (
+    <Modal open={open} onClose={onClose} title={editMou ? "MOU 수정" : "MOU 신규 등록"}>
+      <div style={{display:"flex",flexDirection:"column",gap:12}}>
+        <FF label="* 기관명"><Inp value={f.name} onChange={v=>set("name",v)} placeholder="예) ○○대학교, ○○기업"/></FF>
+
+        {/* 국내/국제 토글 */}
+        <FF label="* 구분">
+          <div style={{display:"flex",gap:6}}>
+            {["국내","국제"].map(s=>(
+              <button key={s} onClick={()=>set("scope",s)} style={{
+                flex:1,padding:"8px",border:`1.5px solid ${f.scope===s?T.sbGreen:T.border}`,
+                borderRadius:10,background:f.scope===s?T.lightGreen:"transparent",
+                color:f.scope===s?T.sbGreen:T.text54,fontWeight:800,fontSize:13,cursor:"pointer",
+              }}>{s==="국내"?"🇰🇷 국내":"🌏 국제"}</button>
+            ))}
+          </div>
+        </FF>
+
+        {/* 국내 세부 */}
+        {f.scope==="국내" && (
+          <FF label="국내 세부 분류">
+            <Sel value={f.domestic_category} onChange={v=>set("domestic_category",v)}
+              options={[{value:"",label:"선택"},...MOU_DOM_CATS.map(c=>({value:c,label:c}))]}/>
+          </FF>
+        )}
+
+        {/* 국제 세부 */}
+        {f.scope==="국제" && (<>
+          <FF label="국제 지역">
+            <Sel value={f.international_region} onChange={v=>set("international_region",v)}
+              options={[{value:"",label:"지역 선택"},...MOU_INTL_REGS.map(r=>({value:r,label:r}))]}/>
+          </FF>
+          <FF label="국가명"><Inp value={f.country} onChange={v=>set("country",v)} placeholder="예) 일본, 미국, 베트남"/></FF>
+        </>)}
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <FF label="기관 유형">
+            <Sel value={f.org_type} onChange={v=>set("org_type",v)}
+              options={[{value:"",label:"선택"},...MOU_ORG_TYPES.map(t=>({value:t,label:t}))]}/>
+          </FF>
+          <FF label="협약 분야">
+            <Sel value={f.field} onChange={v=>set("field",v)}
+              options={[{value:"",label:"선택"},...MOU_FIELDS.map(f=>({value:f,label:f}))]}/>
+          </FF>
+        </div>
+
+        <FF label="협약 목적"><Inp value={f.purpose} onChange={v=>set("purpose",v)} placeholder="예) 콘텐츠 산업 인력 양성 협력"/></FF>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <FF label="체결일"><Inp type="date" value={f.signed_date} onChange={v=>set("signed_date",v)}/></FF>
+          <FF label="만료일"><Inp type="date" value={f.expiry_date} onChange={v=>set("expiry_date",v)}/></FF>
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:T.surfaceAlt,borderRadius:8}}>
+          <input type="checkbox" id="auto_renew" checked={f.is_auto_renew}
+            onChange={e=>set("is_auto_renew",e.target.checked)}
+            style={{width:16,height:16,accentColor:T.sbGreen,cursor:"pointer"}}/>
+          <label htmlFor="auto_renew" style={{fontSize:13,fontWeight:600,cursor:"pointer"}}>자동 갱신</label>
+        </div>
+
+        <FF label="상태">
+          <Sel value={f.status} onChange={v=>set("status",v)}
+            options={MOU_STATUSES.map(s=>({value:s,label:s}))}/>
+        </FF>
+
+        <FF label="비고"><Inp value={f.notes} onChange={v=>set("notes",v)} placeholder="메모"/></FF>
+
+        <Btn onClick={save} disabled={saving} style={{marginTop:4}}>
+          {saving ? "저장 중…" : (editMou ? "수정 저장" : "등록")}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function MouTab({profile, toast, isMobile}: any) {
+  const admin = isAdmin(profile);
+  const [mous, setMous]         = useState<any[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [scopeFilter, setScopeFilter] = useState<"전체"|"국내"|"국제">("전체");
+  const [catFilter, setCatFilter]     = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [fieldFilter, setFieldFilter]   = useState("");
+  const [mouModal, setMouModal] = useState(false);
+  const [editMou, setEditMou]   = useState<any>(null);
+  const [search, setSearch]     = useState("");
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    const {data, error} = await sb.from("mou_partners").select("*").order("signed_date", {ascending:false});
+    if (error) toast(error.message,"error");
+    else setMous(data||[]);
+    setLoading(false);
+  }, [toast]);
+
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const today = new Date();
+  const fmt = (d: string|null) => d ? String(d).slice(0,10) : "—";
+  const fmtDate = (d: string|null) => {
+    if (!d) return "—";
+    const dt = new Date(d);
+    return `${dt.getFullYear()}.${String(dt.getMonth()+1).padStart(2,"0")}.${String(dt.getDate()).padStart(2,"0")}`;
+  };
+
+  // 자동 상태 계산 (만료임박: 60일 이내)
+  const computeStatus = (m: any) => {
+    if (m.status === "만료" || m.status === "갱신중" || m.status === "검토중") return m.status;
+    if (!m.expiry_date) return m.status;
+    const dd = getDdayMou(m.expiry_date);
+    if (dd !== null && dd < 0) return "만료";
+    if (dd !== null && dd <= 60) return "만료임박";
+    return m.status;
+  };
+
+  // 필터링
+  const filtered = useMemo(() => {
+    return mous.filter(m => {
+      const st = computeStatus(m);
+      if (scopeFilter !== "전체" && m.scope !== scopeFilter) return false;
+      if (catFilter) {
+        if (m.scope==="국내" && m.domestic_category !== catFilter) return false;
+        if (m.scope==="국제" && m.international_region !== catFilter) return false;
+      }
+      if (statusFilter && st !== statusFilter) return false;
+      if (fieldFilter && m.field !== fieldFilter) return false;
+      if (search && !m.name.includes(search) && !(m.purpose||"").includes(search) && !(m.country||"").includes(search)) return false;
+      return true;
+    });
+  }, [mous, scopeFilter, catFilter, statusFilter, fieldFilter, search]);
+
+  // 통계
+  const stats = useMemo(() => {
+    const all = mous.map(m => ({...m, _st: computeStatus(m)}));
+    return {
+      total:     all.length,
+      domestic:  all.filter(m=>m.scope==="국내").length,
+      intl:      all.filter(m=>m.scope==="국제").length,
+      valid:     all.filter(m=>m._st==="유효").length,
+      expiring:  all.filter(m=>m._st==="만료임박").length,
+      expired:   all.filter(m=>m._st==="만료").length,
+    };
+  }, [mous]);
+
+  if (loading) return <Spinner/>;
+
+  const catOptions = scopeFilter==="국제" ? MOU_INTL_REGS : scopeFilter==="국내" ? MOU_DOM_CATS : [];
+
+  return (
+    <div>
+      {/* ── 통계 카드 ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+        {([
+          ["🤝 전체 MOU", stats.total+"건", T.sbGreen],
+          ["🇰🇷 국내",   stats.domestic+"건", "#0EA5E9"],
+          ["🌏 국제",    stats.intl+"건",     "#8B5CF6"],
+          ["✅ 유효",    stats.valid+"건",    T.success],
+          ["⚠️ 만료임박", stats.expiring+"건", T.warn],
+          ["🔴 만료",   stats.expired+"건",  T.error],
+        ] as [string,string,string][]).map(([l,v,c])=>(
+          <Card key={l} style={{padding:"10px 12px",textAlign:"center"}}>
+            <div style={{color:T.text38,fontSize:10,marginBottom:2}}>{l}</div>
+            <div style={{fontWeight:900,fontSize:18,color:c}}>{v}</div>
+          </Card>
+        ))}
+      </div>
+
+      {/* ── 필터 바 ── */}
+      <Card style={{padding:"12px 14px",marginBottom:14}}>
+        {/* 국내/국제 */}
+        <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+          {(["전체","국내","국제"] as const).map(s=>(
+            <Chip key={s} label={s==="전체"?"🌐 전체":s==="국내"?"🇰🇷 국내":"🌏 국제"}
+              active={scopeFilter===s}
+              onClick={()=>{setScopeFilter(s);setCatFilter("");}}/>
+          ))}
+        </div>
+        {/* 세부 분류 + 상태 + 분야 */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          {catOptions.length>0 && (
+            <Sel value={catFilter} onChange={setCatFilter} style={{minWidth:110,fontSize:12}}
+              options={[{value:"",label:scopeFilter==="국제"?"지역 전체":"분류 전체"},...catOptions.map(c=>({value:c,label:c}))]}/>
+          )}
+          <Sel value={statusFilter} onChange={setStatusFilter} style={{minWidth:90,fontSize:12}}
+            options={[{value:"",label:"상태 전체"},...MOU_STATUSES.map(s=>({value:s,label:s}))]}/>
+          <Sel value={fieldFilter} onChange={setFieldFilter} style={{minWidth:110,fontSize:12}}
+            options={[{value:"",label:"분야 전체"},...MOU_FIELDS.map(f=>({value:f,label:f}))]}/>
+          <Inp value={search} onChange={setSearch} placeholder="🔍 기관명 검색"
+            style={{fontSize:12,padding:"6px 10px",flex:1,minWidth:120}}/>
+          {admin && (
+            <Btn onClick={()=>{setEditMou(null);setMouModal(true);}}>+ 등록</Btn>
+          )}
+        </div>
+      </Card>
+
+      {/* ── 국내 / 국제 구조 인포 ── */}
+      {scopeFilter!=="전체" && (
+        <Card style={{padding:"12px 16px",marginBottom:14,background:T.lightGreen}}>
+          <div style={{fontSize:12,fontWeight:700,color:T.sbGreen,marginBottom:8}}>
+            {scopeFilter==="국내" ? "🇰🇷 국내 세부 분류 현황" : "🌏 국제 지역별 현황"}
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {(scopeFilter==="국내" ? MOU_DOM_CATS : MOU_INTL_REGS).map(cat=>{
+              const cnt = mous.filter(m=>m.scope===scopeFilter &&
+                (scopeFilter==="국내"?m.domestic_category:m.international_region)===cat).length;
+              return cnt > 0 ? (
+                <div key={cat} style={{display:"flex",alignItems:"center",gap:5,padding:"4px 12px",
+                  background:T.surface,borderRadius:20,border:`1px solid ${T.border}`,fontSize:12}}>
+                  <span style={{fontWeight:700}}>{cat}</span>
+                  <span style={{background:T.sbGreen,color:"#fff",borderRadius:10,padding:"1px 6px",fontSize:10,fontWeight:800}}>{cnt}</span>
+                </div>
+              ) : null;
+            })}
+          </div>
+        </Card>
+      )}
+
+      {/* ── 목록 ── */}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {filtered.map(m => {
+          const st = computeStatus(m);
+          const dd = getDdayMou(m.expiry_date);
+          const stColor = SC_MOU[st] || T.muted;
+          return (
+            <Card key={m.id} style={{padding:"14px 16px",borderLeft:`4px solid ${stColor}`}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
+                {/* 아이콘 */}
+                <div style={{
+                  width:42,height:42,borderRadius:12,flexShrink:0,
+                  background:m.scope==="국제"?"#F5F3FF":"#EFF6FF",
+                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,
+                }}>
+                  {m.scope==="국제"?"🌏":"🇰🇷"}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontWeight:800,fontSize:15,color:T.text87}}>{m.name}</span>
+                    <Badge text={m.scope} color={m.scope==="국제"?"#8B5CF6":"#0EA5E9"}/>
+                    {(m.scope==="국내"?m.domestic_category:m.international_region) &&
+                      <Badge text={m.scope==="국내"?m.domestic_category:m.international_region} color={T.text38}/>}
+                    {m.country && <Badge text={`🌐 ${m.country}`} color="#64748b"/>}
+                    {m.org_type && <Badge text={m.org_type} color={T.muted}/>}
+                    {m.field && <Badge text={m.field} color={T.greenAccent}/>}
+                  </div>
+                  <div style={{display:"flex",gap:12,flexWrap:"wrap",fontSize:12,color:T.text54,marginBottom:4}}>
+                    {m.signed_date && <span>📅 체결 {fmtDate(m.signed_date)}</span>}
+                    {m.expiry_date && (
+                      <span style={{color: dd!==null && dd<=60 ? T.warn : T.text54}}>
+                        ⏰ 만료 {fmtDate(m.expiry_date)}
+                        {dd !== null && <span style={{fontWeight:700,color:dd<0?T.error:dd<=60?T.warn:T.text38,marginLeft:4}}>
+                          {dd<0 ? "만료됨" : `D-${dd}`}
+                        </span>}
+                      </span>
+                    )}
+                    {m.is_auto_renew && <span style={{color:T.success}}>🔄 자동갱신</span>}
+                  </div>
+                  {m.purpose && <div style={{fontSize:12,color:T.text54}}>📌 {m.purpose}</div>}
+                  {m.notes && <div style={{fontSize:11,color:T.text38,marginTop:3}}>{m.notes}</div>}
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:6,flexShrink:0,alignItems:"flex-end"}}>
+                  <Badge text={st} color={stColor}/>
+                  {admin && (
+                    <Btn onClick={()=>{setEditMou(m);setMouModal(true);}} variant="outline"
+                      color={T.greenAccent} style={{padding:"4px 10px",fontSize:11}}>수정</Btn>
+                  )}
+                </div>
+              </div>
+            </Card>
+          );
+        })}
+        {filtered.length===0 && (
+          <div style={{textAlign:"center",padding:60,color:T.text38}}>
+            {mous.length===0 ? "등록된 MOU가 없습니다. [+ 등록] 버튼으로 추가해 주세요." : "검색 결과가 없습니다."}
+          </div>
+        )}
+      </div>
+
+      <MouFormModal open={mouModal} onClose={()=>setMouModal(false)}
+        editMou={editMou} toast={toast} fetchAll={fetchAll}/>
+    </div>
+  );
+}
+
 function TenantTab({profile, toast, isMobile}) {
   const admin = isAdmin(profile);
   const [subTab, setSubTab]     = useState(0);
@@ -3045,6 +3388,7 @@ export default function App() {
     {key:"dashboard", label:"현황",  full:"관리 현황", icon:"📊"},
     {key:"export",    label:"출력",  full:"보고자료",  icon:"📤"},
     {key:"tenant",    label:"입주",  full:"입주기업",  icon:"🏢"},
+    {key:"mou",       label:"MOU",   full:"MOU현황",   icon:"🤝"},
     ...(isAdmin(profile) ? [{key:"account", label:"계정", full:"계정관리", icon:"👤"}] : []),
   ];
   const tabKey = TABS[tab]?.key;
@@ -3236,6 +3580,7 @@ export default function App() {
           {tabKey==="dashboard" && <DashTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
           {tabKey==="export"    && <ExportTab depts={depts} kpis={kpis} year={year} isMobile={isMobile}/>}
           {tabKey==="tenant"    && <TenantTab profile={profile} toast={toast} isMobile={isMobile}/>}
+          {tabKey==="mou"       && <MouTab profile={profile} toast={toast} isMobile={isMobile}/>}
           {tabKey==="account"   && isAdmin(profile) && <AccountTab depts={depts} toast={toast}/>}
         </>}
       </div>

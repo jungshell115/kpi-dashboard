@@ -642,7 +642,7 @@ function LoginPage({onLogin}) {
         <Btn
           onClick={submit} full disabled={loading}
           style={{marginTop: 8, padding: "13px 20px", fontSize: 15}}>
-          {loading ? "처리 중..." : mode==="login" ? "로그인" : mode==="signup" ? "회원가입" : "비밀번호 재설정 이메일 발송"}
+          {loading ? "처리 중..." : mode==="login" ? "로그인" : mode==="signup" ? "계정 신청" : "비밀번호 재설정 이메일 발송"}
         </Btn>
 
         <div style={{display:"flex",justifyContent:"center",gap:20,marginTop:20}}>
@@ -655,7 +655,7 @@ function LoginPage({onLogin}) {
           {mode !== "signup" && (
             <button onClick={()=>{setMode("signup");setErr("");}}
               style={{background:"none",border:"none",color:T.text38,fontSize:12,cursor:"pointer",letterSpacing:"-0.01em"}}>
-              회원가입
+              계정 신청
             </button>
           )}
           {mode !== "reset" && (
@@ -1018,7 +1018,7 @@ function RegisterTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
         </>
       ) : (
         <div style={{display:"flex",gap:20,alignItems:"flex-start",marginBottom:16}}>
-          <Card style={{width:300,padding:20,flexShrink:0}}>
+          <Card style={{width:300,padding:20,flexShrink:0,position:"sticky",top:80,maxHeight:"calc(100vh - 100px)",overflowY:"auto"}}>
             <STitle>{editId ? "✏️ KPI 수정" : "➕ KPI 등록"}</STitle>
             <div style={{color:T.text38,fontSize:11,marginBottom:12,letterSpacing:"-0.01em"}}>{year}년도</div>
             {allowedDepts.length > 0
@@ -1168,7 +1168,9 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
   const openInput = kpi => {
     setOpenId(kpi.id);
     const ps = getPeriods(kpi.cycle), used = (kpi.records||[]).map(r=>r.period);
-    setForm({period:ps.find(p=>!used.includes(p))||ps[ps.length-1], actual:"", evidence:"", note:""});
+    const defaultPeriod = ps.find(p=>!used.includes(p)) || ps[ps.length-1];
+    const existing = kpi.records?.find(r=>r.period===defaultPeriod);
+    setForm({period:defaultPeriod, actual:existing?String(existing.actual):"", evidence:existing?.evidence||"", note:existing?.note||""});
   };
 
   const save = async kpiId => {
@@ -1279,7 +1281,10 @@ function ActualTab({depts, kpis, refetch, year, isMobile, profile, toast}) {
                   <div style={{marginTop:14,background:T.surfaceAlt,borderRadius:12,padding:16,display:"flex",flexDirection:"column",gap:10,border:`1px solid ${T.border}`}}>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                       <FF label="기간">
-                        <Sel value={form.period} onChange={v=>setForm(f=>({...f,period:v}))} options={ps.map(p=>({value:p,label:p}))}/>
+                        <Sel value={form.period} onChange={v=>{
+                          const ex = kpi.records?.find(r=>r.period===v);
+                          setForm(f=>({...f,period:v,actual:ex?String(ex.actual):"",evidence:ex?.evidence||"",note:ex?.note||""}));
+                        }} options={ps.map(p=>({value:p,label:p}))}/>
                       </FF>
                       <FF label={`실적값 (${kpi.unit})`}>
                         <Inp type="number" value={form.actual} onChange={v=>setForm(f=>({...f,actual:v}))} placeholder={`목표: ${kpi.target}`} style={{borderColor:T.greenAccent}}/>
@@ -2523,7 +2528,7 @@ function TRecordForm({ctx}: any) {
     <Modal open={recordModal} onClose={()=>setRecordModal(false)} title={`${tenant?.company_name||""} 실적 입력`}>
       <FF label="연도">
         <Sel value={f.year} onChange={v=>setF(p=>({...p,year:v}))}
-          options={[CY-2,CY-1,CY,CY+1].map(y=>({value:y,label:`${y}년`}))}/>
+          options={[CY-3,CY-2,CY-1,CY,CY+1].map(y=>({value:y,label:`${y}년`}))}/>
       </FF>
       <FF label="근무자 수">
         <Inp type="number" value={f.employee_count} onChange={v=>setF(p=>({...p,employee_count:v}))} placeholder="명"/>
@@ -3141,6 +3146,14 @@ function MouTab({profile, toast, isMobile}: any) {
                     <Btn onClick={()=>{setEditMou(m);setMouModal(true);}} variant="outline"
                       color={T.greenAccent} style={{padding:"4px 10px",fontSize:11}}>수정</Btn>
                   )}
+                  {admin && (
+                    <Btn onClick={async()=>{
+                      if(!confirm(`"${m.name}" MOU를 삭제하시겠습니까?`)) return;
+                      const {error} = await sb.from("mou_partners").delete().eq("id",m.id);
+                      if(error) toast(error.message,"error");
+                      else { toast("삭제됐습니다","warn"); fetchAll(); }
+                    }} variant="outline" color={T.error} style={{padding:"4px 10px",fontSize:11}}>삭제</Btn>
+                  )}
                 </div>
               </div>
             </Card>
@@ -3282,10 +3295,19 @@ function TenantTab({profile, toast, isMobile}) {
   return (
     <div>
       {/* 입주기업 통계 카드 패널 */}
-      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,1fr)",gap:8,marginBottom:8}}>
         {([
           ["입주기업", `${tenantStats.activeTenants}개사`, T.sbGreen],
           ["공간점유율", `${tenantStats.occupancyRate}%`, T.greenAccent],
+        ] as [string,string,string][]).map(([l,v,c])=>(
+          <Card key={l} style={{padding:"10px 12px",textAlign:"center"}}>
+            <div style={{color:T.text38,fontSize:10,marginBottom:2,letterSpacing:"-0.01em"}}>{l}</div>
+            <div style={{fontWeight:900,fontSize:17,color:c}}>{v}</div>
+          </Card>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+        {([
           ["누적매출", tenantStats.totalRev>0?`${(tenantStats.totalRev/100000000).toFixed(1)}억`:"—", T.success],
           ["투자유치", tenantStats.totalInv>0?`${(tenantStats.totalInv/100000000).toFixed(1)}억`:"—", "#8b5cf6"],
           ["고용인원", tenantStats.totalEmp>0?`${tenantStats.totalEmp}명`:"—", T.warn],
@@ -3499,7 +3521,7 @@ export default function App() {
                 minWidth:100,
                 boxShadow:T.shadowMd,
               }}>
-                {[CY-1, CY, CY+1].map(y=>(
+                {[CY-2, CY-1, CY, CY+1].map(y=>(
                   <button key={y} onClick={()=>{setYear(y);setYearOpen(false);}} style={{
                     display:"block", width:"100%",
                     background: year===y ? T.greenAccent : "transparent",
@@ -3595,12 +3617,12 @@ export default function App() {
           zIndex:200,
           boxShadow:"0 -2px 16px rgba(0,0,0,0.08)",
         }}>
-          {TABS.map((t,i)=>(
-            <button key={i} onClick={()=>setTab(i)} style={{
+          {TABS.filter(t=>t.key!=="account").map((t)=>{const origIdx=TABS.indexOf(t); return (
+            <button key={origIdx} onClick={()=>setTab(origIdx)} style={{
               flex:1,
               background:"none",
               border:"none",
-              color: tab===i ? T.greenAccent : T.text38,
+              color: tab===origIdx ? T.greenAccent : T.text38,
               padding:"9px 0 10px",
               cursor:"pointer",
               display:"flex",
@@ -3610,15 +3632,15 @@ export default function App() {
               position:"relative",
             }}>
               <span style={{fontSize:17}}>{t.icon}</span>
-              <span style={{fontSize:9, fontWeight:tab===i?800:600, letterSpacing:"-0.01em"}}>{t.label}</span>
+              <span style={{fontSize:9, fontWeight:tab===origIdx?800:600, letterSpacing:"-0.01em"}}>{t.label}</span>
               {t.key==="actual" && 미입cnt>0 && (
                 <span style={{position:"absolute",top:5,right:"calc(50% - 18px)",background:T.error,color:"#fff",borderRadius:10,fontSize:9,fontWeight:900,padding:"1px 5px"}}>{미입cnt}</span>
               )}
-              {tab===i && (
+              {tab===origIdx && (
                 <div style={{position:"absolute",bottom:0,left:"20%",right:"20%",height:2.5,background:T.greenAccent,borderRadius:2}}/>
               )}
             </button>
-          ))}
+          );})}
         </div>
       )}
     </div>
